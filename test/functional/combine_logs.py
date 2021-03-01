@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
-"""Combine logs from multiple raven nodes as well as the test_framework log.
+# Copyright (c) 2016 The Bitcoin Core developers
+# Copyright (c) 2017-2020 The Raven Core developers
+# Distributed under the MIT software license, see the accompanying
+# file COPYING or http://www.opensource.org/licenses/mit-license.php.
+
+"""
+Combine logs from multiple raven nodes as well as the test_framework log.
 
 This streams the combined log output to stdout. Use combine_logs.py > outputfile
-to write to an outputfile."""
+to write to an outputfile.
+"""
 
 import argparse
 from collections import defaultdict, namedtuple
@@ -85,14 +92,16 @@ def get_log_events(source, logfile):
     except FileNotFoundError:
         print("File %s could not be opened. Continuing without it." % logfile, file=sys.stderr)
 
+
+# noinspection PyProtectedMember
 def print_logs(log_events, color=False, html=False):
     """Renders the iterator of log events into text or html."""
     if not html:
         colors = defaultdict(lambda: '')
         if color:
             colors["test"] = "\033[0;36m"   # CYAN
-            colors["node0"] = "\033[0;34m"  # BLUE
-            colors["node1"] = "\033[0;32m"  # GREEN
+            colors["node1"] = "\033[0;34m"  # BLUE
+            colors["node0"] = "\033[0;32m"  # GREEN
             colors["node2"] = "\033[0;31m"  # RED
             colors["node3"] = "\033[0;33m"  # YELLOW
             colors["reset"] = "\033[0m"     # Reset font color

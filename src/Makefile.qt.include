@@ -1,5 +1,5 @@
 # Copyright (c) 2013-2016 The Bitcoin Core developers
-# Copyright (c) 2017 The Raven Core developers
+# Copyright (c) 2017-2019 The Raven Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -67,7 +67,6 @@ QT_TS = \
   qt/locale/raven_nb.ts \
   qt/locale/raven_ne.ts \
   qt/locale/raven_nl.ts \
-  qt/locale/raven_pam.ts \
   qt/locale/raven_pl.ts \
   qt/locale/raven_pt_BR.ts \
   qt/locale/raven_pt_PT.ts \
@@ -98,6 +97,7 @@ QT_TS = \
 QT_FORMS_UI = \
   qt/forms/addressbookpage.ui \
   qt/forms/askpassphrasedialog.ui \
+  qt/forms/assetcontroldialog.ui \
   qt/forms/coincontroldialog.ui \
   qt/forms/editaddressdialog.ui \
   qt/forms/helpmessagedialog.ui \
@@ -112,12 +112,23 @@ QT_FORMS_UI = \
   qt/forms/sendcoinsdialog.ui \
   qt/forms/sendcoinsentry.ui \
   qt/forms/signverifymessagedialog.ui \
-  qt/forms/transactiondescdialog.ui
+  qt/forms/transactiondescdialog.ui \
+  qt/forms/assetsdialog.ui \
+  qt/forms/createassetdialog.ui \
+  qt/forms/reissueassetdialog.ui \
+  qt/forms/restrictedassetsdialog.ui \
+  qt/forms/restrictedassignqualifier.ui \
+  qt/forms/restrictedfreezeaddress.ui \
+  qt/forms/sendassetsentry.ui \
+  qt/forms/mnemonicdialog.ui
 
 QT_MOC_CPP = \
   qt/moc_addressbookpage.cpp \
   qt/moc_addresstablemodel.cpp \
   qt/moc_askpassphrasedialog.cpp \
+  qt/moc_assetcontroldialog.cpp \
+  qt/moc_assetcontroltreewidget.cpp \
+  qt/moc_assetfilterproxy.cpp \
   qt/moc_bantablemodel.cpp \
   qt/moc_ravenaddressvalidator.cpp \
   qt/moc_ravenamountfield.cpp \
@@ -128,6 +139,7 @@ QT_MOC_CPP = \
   qt/moc_coincontroldialog.cpp \
   qt/moc_coincontroltreewidget.cpp \
   qt/moc_csvmodelwriter.cpp \
+  qt/moc_darkstyle.cpp \
   qt/moc_editaddressdialog.cpp \
   qt/moc_guiutil.cpp \
   qt/moc_intro.cpp \
@@ -138,7 +150,9 @@ QT_MOC_CPP = \
   qt/moc_openuridialog.cpp \
   qt/moc_optionsdialog.cpp \
   qt/moc_optionsmodel.cpp \
+  qt/moc_assettablemodel.cpp \
   qt/moc_overviewpage.cpp \
+  qt/moc_myrestrictedassettablemodel.cpp \
   qt/moc_peertablemodel.cpp \
   qt/moc_paymentserver.cpp \
   qt/moc_qvalidatedlineedit.cpp \
@@ -160,7 +174,15 @@ QT_MOC_CPP = \
   qt/moc_utilitydialog.cpp \
   qt/moc_walletframe.cpp \
   qt/moc_walletmodel.cpp \
-  qt/moc_walletview.cpp
+  qt/moc_walletview.cpp \
+  qt/moc_assetsdialog.cpp \
+  qt/moc_createassetdialog.cpp \
+  qt/moc_reissueassetdialog.cpp \
+  qt/moc_restrictedassetsdialog.cpp \
+  qt/moc_restrictedassignqualifier.cpp \
+  qt/moc_restrictedfreezeaddress.cpp \
+  qt/moc_sendassetsentry.cpp \
+  qt/moc_mnemonicdialog.cpp
 
 RAVEN_MM = \
   qt/macdockiconhandler.mm \
@@ -187,6 +209,12 @@ RAVEN_QT_H = \
   qt/addressbookpage.h \
   qt/addresstablemodel.h \
   qt/askpassphrasedialog.h \
+  qt/assetcontroldialog.h \
+  qt/assetcontroltreewidget.h \
+  qt/assetfilterproxy.h \
+  qt/assetrecord.h \
+  qt/assetsdialog.h \
+  qt/createassetdialog.h \
   qt/bantablemodel.h \
   qt/ravenaddressvalidator.h \
   qt/ravenamountfield.h \
@@ -197,6 +225,7 @@ RAVEN_QT_H = \
   qt/coincontroldialog.h \
   qt/coincontroltreewidget.h \
   qt/csvmodelwriter.h \
+  qt/darkstyle.h \
   qt/editaddressdialog.h \
   qt/guiconstants.h \
   qt/guiutil.h \
@@ -204,11 +233,14 @@ RAVEN_QT_H = \
   qt/macdockiconhandler.h \
   qt/macnotificationhandler.h \
   qt/modaloverlay.h \
+  qt/myrestrictedassettablemodel.h \
+  qt/myrestrictedassetrecord.h \
   qt/networkstyle.h \
   qt/notificator.h \
   qt/openuridialog.h \
   qt/optionsdialog.h \
   qt/optionsmodel.h \
+  qt/assettablemodel.h \
   qt/overviewpage.h \
   qt/paymentrequestplus.h \
   qt/paymentserver.h \
@@ -219,7 +251,12 @@ RAVEN_QT_H = \
   qt/receivecoinsdialog.h \
   qt/receiverequestdialog.h \
   qt/recentrequeststablemodel.h \
+  qt/reissueassetdialog.h \
+  qt/restrictedassetsdialog.h \
+  qt/restrictedassignqualifier.h \
+  qt/restrictedfreezeaddress.h \
   qt/rpcconsole.h \
+  qt/sendassetsentry.h \
   qt/sendcoinsdialog.h \
   qt/sendcoinsentry.h \
   qt/signverifymessagedialog.h \
@@ -236,13 +273,23 @@ RAVEN_QT_H = \
   qt/walletmodel.h \
   qt/walletmodeltransaction.h \
   qt/walletview.h \
-  qt/winshutdownmonitor.h
+  qt/winshutdownmonitor.h \
+  qt/mnemonicdialog.h
 
 RES_ICONS = \
   qt/res/icons/add.png \
   qt/res/icons/address-book.png \
   qt/res/icons/about.png \
   qt/res/icons/about_qt.png \
+  qt/res/icons/asset_administrator.png \
+  qt/res/icons/asset_administrator_dark.png \
+  qt/res/icons/asset_create.png \
+  qt/res/icons/asset_create_selected.png \
+  qt/res/icons/asset_manage.png \
+  qt/res/icons/asset_manage_selected.png \
+  qt/res/icons/asset_transfer.png \
+  qt/res/icons/asset_transfer_selected.png \
+  qt/res/icons/ravencointext.png \
   qt/res/icons/raven.ico \
   qt/res/icons/raven_testnet.ico \
   qt/res/icons/raven.png \
@@ -263,6 +310,8 @@ RES_ICONS = \
   qt/res/icons/editcopy.png \
   qt/res/icons/editpaste.png \
   qt/res/icons/export.png \
+  qt/res/icons/external_link.png \
+  qt/res/icons/external_link_dark.png \
   qt/res/icons/eye.png \
   qt/res/icons/eye_minus.png \
   qt/res/icons/eye_plus.png \
@@ -272,6 +321,7 @@ RES_ICONS = \
   qt/res/icons/hd_disabled.png \
   qt/res/icons/hd_enabled.png \
   qt/res/icons/history.png \
+  qt/res/icons/history_selected.png \
   qt/res/icons/info.png \
   qt/res/icons/key.png \
   qt/res/icons/lock_closed.png \
@@ -279,10 +329,14 @@ RES_ICONS = \
   qt/res/icons/network_disabled.png \
   qt/res/icons/open.png \
   qt/res/icons/overview.png \
+  qt/res/icons/overview_selected.png \
   qt/res/icons/quit.png \
   qt/res/icons/receive.png \
+  qt/res/icons/receive_selected.png \
+  qt/res/icons/refresh.png \
   qt/res/icons/remove.png \
   qt/res/icons/send.png \
+  qt/res/icons/send_selected.png \
   qt/res/icons/synced.png \
   qt/res/icons/transaction0.png \
   qt/res/icons/transaction2.png \
@@ -292,8 +346,44 @@ RES_ICONS = \
   qt/res/icons/tx_input.png \
   qt/res/icons/tx_output.png \
   qt/res/icons/tx_mined.png \
+  qt/res/icons/tx_asset_input.png \
+  qt/res/icons/tx_asset_output.png \
   qt/res/icons/warning.png \
-  qt/res/icons/verify.png
+  qt/res/icons/verify.png \
+  qt/res/darkstyle/icon_close.png \
+  qt/res/darkstyle/icon_restore.png \
+  qt/res/darkstyle/icon_undock.png \
+  qt/res/darkstyle/icon_branch_closed.png \
+  qt/res/darkstyle/icon_branch_end.png \
+  qt/res/darkstyle/icon_branch_more.png \
+  qt/res/darkstyle/icon_branch_open.png \
+  qt/res/darkstyle/icon_vline.png \
+  qt/res/darkstyle/icon_checkbox_checked.png \
+  qt/res/darkstyle/icon_checkbox_indeterminate.png \
+  qt/res/darkstyle/icon_checkbox_unchecked.png \
+  qt/res/darkstyle/icon_checkbox_checked_pressed.png \
+  qt/res/darkstyle/icon_checkbox_indeterminate_pressed.png \
+  qt/res/darkstyle/icon_checkbox_unchecked_pressed.png \
+  qt/res/darkstyle/icon_checkbox_checked_disabled.png \
+  qt/res/darkstyle/icon_checkbox_indeterminate_disabled.png \
+  qt/res/darkstyle/icon_checkbox_unchecked_disabled.png \
+  qt/res/darkstyle/icon_radiobutton_checked.png \
+  qt/res/darkstyle/icon_radiobutton_unchecked.png \
+  qt/res/darkstyle/icon_radiobutton_checked_pressed.png \
+  qt/res/darkstyle/icon_radiobutton_unchecked_pressed.png \
+  qt/res/darkstyle/icon_radiobutton_checked_disabled.png \
+  qt/res/darkstyle/icon_radiobutton_unchecked_disabled.png \
+  qt/res/fonts/OpenSans-Bold.ttf \
+  qt/res/fonts/OpenSans-BoldItalic.ttf \
+  qt/res/fonts/OpenSans-ExtraBold.ttf \
+  qt/res/fonts/OpenSans-ExtraBoldItalic.ttf \
+  qt/res/fonts/OpenSans-Italic.ttf \
+  qt/res/fonts/OpenSans-Light.ttf \
+  qt/res/fonts/OpenSans-LightItalic.ttf \
+  qt/res/fonts/OpenSans-Regular.ttf \
+  qt/res/fonts/OpenSans-SemiBold.ttf \
+  qt/res/fonts/OpenSans-SemiBoldItalic.ttf
+
 
 RAVEN_QT_BASE_CPP = \
   qt/bantablemodel.cpp \
@@ -303,6 +393,7 @@ RAVEN_QT_BASE_CPP = \
   qt/ravenunits.cpp \
   qt/clientmodel.cpp \
   qt/csvmodelwriter.cpp \
+  qt/darkstyle.cpp \
   qt/guiutil.cpp \
   qt/intro.cpp \
   qt/modaloverlay.cpp \
@@ -310,6 +401,7 @@ RAVEN_QT_BASE_CPP = \
   qt/notificator.cpp \
   qt/optionsdialog.cpp \
   qt/optionsmodel.cpp \
+  qt/assettablemodel.cpp \
   qt/peertablemodel.cpp \
   qt/platformstyle.cpp \
   qt/qvalidatedlineedit.cpp \
@@ -325,16 +417,28 @@ RAVEN_QT_WALLET_CPP = \
   qt/addressbookpage.cpp \
   qt/addresstablemodel.cpp \
   qt/askpassphrasedialog.cpp \
+  qt/assetcontroldialog.cpp \
+  qt/assetcontroltreewidget.cpp \
+  qt/assetfilterproxy.cpp \
+  qt/assetsdialog.cpp \
+  qt/createassetdialog.cpp \
   qt/coincontroldialog.cpp \
   qt/coincontroltreewidget.cpp \
   qt/editaddressdialog.cpp \
   qt/openuridialog.cpp \
   qt/overviewpage.cpp \
+  qt/myrestrictedassettablemodel.cpp \
+  qt/myrestrictedassetrecord.cpp \
   qt/paymentrequestplus.cpp \
   qt/paymentserver.cpp \
   qt/receivecoinsdialog.cpp \
   qt/receiverequestdialog.cpp \
   qt/recentrequeststablemodel.cpp \
+  qt/reissueassetdialog.cpp \
+  qt/restrictedassetsdialog.cpp \
+  qt/restrictedassignqualifier.cpp \
+  qt/restrictedfreezeaddress.cpp \
+  qt/sendassetsentry.cpp \
   qt/sendcoinsdialog.cpp \
   qt/sendcoinsentry.cpp \
   qt/signverifymessagedialog.cpp \
@@ -347,7 +451,8 @@ RAVEN_QT_WALLET_CPP = \
   qt/walletframe.cpp \
   qt/walletmodel.cpp \
   qt/walletmodeltransaction.cpp \
-  qt/walletview.cpp
+  qt/walletview.cpp \
+  qt/mnemonicdialog.cpp
 
 RAVEN_QT_CPP = $(RAVEN_QT_BASE_CPP)
 if TARGET_WINDOWS

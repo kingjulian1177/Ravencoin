@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
-// Copyright (c) 2017 The Raven Core developers
+// Copyright (c) 2017-2020 The Raven Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -74,14 +74,14 @@ int64_t UpdateTime(CBlockHeader* pblock, const Consensus::Params& consensusParam
 
 BlockAssembler::Options::Options() {
     blockMinFeeRate = CFeeRate(DEFAULT_BLOCK_MIN_TX_FEE);
-    nBlockMaxWeight = DEFAULT_BLOCK_MAX_WEIGHT;
+    nBlockMaxWeight = GetMaxBlockWeight() - 4000;
 }
 
 BlockAssembler::BlockAssembler(const CChainParams& params, const Options& options) : chainparams(params)
 {
     blockMinFeeRate = options.blockMinFeeRate;
     // Limit weight to between 4K and MAX_BLOCK_WEIGHT-4K for sanity:
-    nBlockMaxWeight = std::max<size_t>(4000, std::min<size_t>(MAX_BLOCK_WEIGHT - 4000, options.nBlockMaxWeight));
+    nBlockMaxWeight = std::max<size_t>(4000, std::min<size_t>(GetMaxBlockWeight() - 4000, options.nBlockMaxWeight));
 }
 
 static BlockAssembler::Options DefaultOptions(const CChainParams& params)
@@ -91,7 +91,7 @@ static BlockAssembler::Options DefaultOptions(const CChainParams& params)
     // If only one is given, only restrict the specified resource.
     // If both are given, restrict both.
     BlockAssembler::Options options;
-    options.nBlockMaxWeight = gArgs.GetArg("-blockmaxweight", DEFAULT_BLOCK_MAX_WEIGHT);
+    options.nBlockMaxWeight = gArgs.GetArg("-blockmaxweight",  GetMaxBlockWeight() - 4000);
     if (gArgs.IsArgSet("-blockmintxfee")) {
         CAmount n = 0;
         ParseMoney(gArgs.GetArg("-blockmintxfee", ""), n);
@@ -189,10 +189,35 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
     UpdateTime(pblock, chainparams.GetConsensus(), pindexPrev);
     pblock->nBits          = GetNextWorkRequired(pindexPrev, pblock, chainparams.GetConsensus());
     pblock->nNonce         = 0;
+    pblock->nNonce64         = 0;
+    pblock->nHeight          = nHeight;
     pblocktemplate->vTxSigOpsCost[0] = WITNESS_SCALE_FACTOR * GetLegacySigOpCount(*pblock->vtx[0]);
 
     CValidationState state;
     if (!TestBlockValidity(state, chainparams, *pblock, pindexPrev, false, false)) {
+        if (state.IsTransactionError()) {
+            if (gArgs.GetBoolArg("-autofixmempool", false)) {
+                {
+                    TRY_LOCK(mempool.cs, fLockMempool);
+                    if (fLockMempool) {
+                        LogPrintf("%s failed because of a transaction %s. -autofixmempool is set to true. Clearing the mempool\n", __func__,
+                                  state.GetFailedTransaction().GetHex());
+                        mempool.clear();
+                    }
+                }
+            } else {
+                {
+                    TRY_LOCK(mempool.cs, fLockMempool);
+                    if (fLockMempool) {
+                        auto mempoolTx = mempool.get(state.GetFailedTransaction());
+                        if (mempoolTx) {
+                            LogPrintf("%s : Failed because of a transaction %s. Trying to remove the transaction from the mempool\n", __func__, state.GetFailedTransaction().GetHex());
+                            mempool.removeRecursive(*mempoolTx, MemPoolRemovalReason::CONFLICT);
+                        }
+                    }
+                }
+            }
+        }
         throw std::runtime_error(strprintf("%s: TestBlockValidity failed: %s", __func__, FormatStateMessage(state)));
     }
     int64_t nTime2 = GetTimeMicros();
@@ -498,6 +523,7 @@ static bool ProcessBlockFound(const CBlock* pblock, const CChainParams& chainpar
 }
 
 CWallet *GetFirstWallet() {
+#ifdef ENABLE_WALLET
     while(vpwallets.size() == 0){
         MilliSleep(100);
 
@@ -505,6 +531,8 @@ CWallet *GetFirstWallet() {
     if (vpwallets.size() == 0)
         return(NULL);
     return(vpwallets[0]);
+#endif
+    return(NULL);
 }
 
 void static RavenMiner(const CChainParams& chainparams)
@@ -516,14 +544,22 @@ void static RavenMiner(const CChainParams& chainparams)
     unsigned int nExtraNonce = 0;
 
 
-    CWallet *  pWallet = GetFirstWallet();
+    CWallet * pWallet = NULL;
+
+#ifdef ENABLE_WALLET
+    pWallet = GetFirstWallet();
+
 
     if (!EnsureWalletIsAvailable(pWallet, false)) {
         LogPrintf("RavenMiner -- Wallet not available\n");
     }
+#endif
 
     if (pWallet == NULL)
+    {
         LogPrintf("pWallet is NULL\n");
+        return;
+    }
 
 
     std::shared_ptr<CReserveScript> coinbaseScript;
@@ -554,6 +590,7 @@ void static RavenMiner(const CChainParams& chainparams)
                 // Busy-wait for the network to come online so we don't waste time mining
                 // on an obsolete chain. In regtest mode we expect to fly solo.
                 do {
+                    break;
                     if ((g_connman->GetNodeCount(CConnman::CONNECTIONS_ALL) > 0) && !IsInitialBlockDownload()) {
                         break;
                     }
@@ -572,7 +609,7 @@ void static RavenMiner(const CChainParams& chainparams)
 
 
 
-            std::unique_ptr<CBlockTemplate> pblocktemplate(BlockAssembler(Params()).CreateNewBlock(coinbaseScript->reserveScript));
+            std::unique_ptr<CBlockTemplate> pblocktemplate(BlockAssembler(GetParams()).CreateNewBlock(coinbaseScript->reserveScript));
 
             if (!pblocktemplate.get())
             {
@@ -594,11 +631,13 @@ void static RavenMiner(const CChainParams& chainparams)
             {
 
                 uint256 hash;
+                uint256 mix_hash;
                 while (true)
                 {
-                    hash = pblock->GetHash();
+                    hash = pblock->GetHashFull(mix_hash);
                     if (UintToArith256(hash) <= hashTarget)
                     {
+                        pblock->mix_hash = mix_hash;
                         // Found a solution
                         SetThreadPriority(THREAD_PRIORITY_NORMAL);
                         LogPrintf("RavenMiner:\n  proof-of-work found\n  hash: %s\n  target: %s\n", hash.GetHex(), hashTarget.GetHex());

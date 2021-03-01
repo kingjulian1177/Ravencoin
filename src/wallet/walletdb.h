@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
-// Copyright (c) 2017 The Raven Core developers
+// Copyright (c) 2017-2020 The Raven Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -11,6 +11,7 @@
 #include "primitives/transaction.h"
 #include "wallet/db.h"
 #include "key.h"
+#include "wallet/bip39.h"
 
 #include <list>
 #include <stdint.h>
@@ -63,32 +64,58 @@ class CHDChain
 public:
     uint32_t nExternalChainCounter;
     uint32_t nInternalChainCounter;
-    CKeyID masterKeyID; //!< master key hash160
+    CKeyID seed_id; //!< seed hash160
+
+    bool bUse_bip44;
+    SecureVector vchMnemonic;
+    SecureVector vchMnemonicPassphrase;
+    SecureVector vchSeed;
 
     static const int VERSION_HD_BASE        = 1;
     static const int VERSION_HD_CHAIN_SPLIT = 2;
-    static const int CURRENT_VERSION        = VERSION_HD_CHAIN_SPLIT;
+    static const int VERSION_HD_BIP44_BIP39 = 3;
+    static const int CURRENT_VERSION        = VERSION_HD_BIP44_BIP39;
     int nVersion;
 
-    CHDChain() { SetNull(); }
+    CWallet* pwallet;
+
+    CHDChain(CWallet* pw): pwallet(pw) { SetNull(); }
+
     ADD_SERIALIZE_METHODS;
     template <typename Stream, typename Operation>
     inline void SerializationOp(Stream& s, Operation ser_action)
     {
         READWRITE(this->nVersion);
         READWRITE(nExternalChainCounter);
-        READWRITE(masterKeyID);
-        if (this->nVersion >= VERSION_HD_CHAIN_SPLIT)
+        READWRITE(seed_id);
+        if (this->nVersion >= VERSION_HD_CHAIN_SPLIT) {
             READWRITE(nInternalChainCounter);
+        }
+
+        if(VERSION_HD_BIP44_BIP39 == this->nVersion) {
+            READWRITE(bUse_bip44);
+        }
     }
+
+    void SetSeedFromSeedId();
 
     void SetNull()
     {
         nVersion = CHDChain::CURRENT_VERSION;
         nExternalChainCounter = 0;
         nInternalChainCounter = 0;
-        masterKeyID.SetNull();
+        seed_id.SetNull();
+        bUse_bip44 = false;
     }
+
+    bool IsNull() { return seed_id.IsNull();}
+
+
+    void UseBip44( bool b = true)   { bUse_bip44 = b;}
+    bool IsBip44() const            { return bUse_bip44 == true;}
+
+
+    bool SetMnemonic(const SecureString& ssMnemonic, const SecureString& ssMnemonicPassphrase, SecureVector& vchSeed);
 };
 
 class CKeyMetadata
@@ -100,7 +127,7 @@ public:
     int nVersion;
     int64_t nCreateTime; // 0 means unknown
     std::string hdKeypath; //optional HD/bip32 keypath
-    CKeyID hdMasterKeyID; //id of the HD masterkey used to derive this key
+    CKeyID hd_seed_id; //id of the HD seed used to derive this key
 
     CKeyMetadata()
     {
@@ -121,7 +148,7 @@ public:
         if (this->nVersion >= VERSION_WITH_HDDATA)
         {
             READWRITE(hdKeypath);
-            READWRITE(hdMasterKeyID);
+            READWRITE(hd_seed_id);
         }
     }
 
@@ -130,7 +157,7 @@ public:
         nVersion = CKeyMetadata::CURRENT_VERSION;
         nCreateTime = 0;
         hdKeypath.clear();
-        hdMasterKeyID.SetNull();
+        hd_seed_id.SetNull();
     }
 };
 
@@ -244,6 +271,16 @@ public:
     bool ReadVersion(int& nVersion);
     //! Write wallet version
     bool WriteVersion(int nVersion);
+
+    bool WriteBip39Words(const uint256& hash, const std::vector<unsigned char>& vchWords, bool fEncrypted);
+    bool WriteBip39Passphrase(const std::vector<unsigned char>& vchPassphrase, bool fEncrypted);
+    bool WriteBip39VchSeed(const std::vector<unsigned char>& vchSeed,  bool fEncrypted);
+    bool ReadBip39Words(uint256& hash, std::vector<unsigned char>& vchWords, bool fEncrypted);
+    bool ReadBip39Passphrase(std::vector<unsigned char>& vchPassphrase, bool fEncrypted);
+    bool ReadBip39VchSeed(std::vector<unsigned char>& vchSeed,  bool fEncrypted);
+    bool EraseBip39Words(bool fEncrypted);
+    bool EraseBip39Passphrase(bool fEncrypted);
+    bool EraseBip39VchSeed(bool fEncrypted);
 private:
     CDB batch;
     CWalletDBWrapper& m_dbw;

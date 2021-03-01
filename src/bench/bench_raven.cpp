@@ -1,10 +1,11 @@
 // Copyright (c) 2015-2016 The Bitcoin Core developers
-// Copyright (c) 2017 The Raven Core developers
+// Copyright (c) 2017-2019 The Raven Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <chainparamsbase.h>
+#include <chainparams.h>
 #include "bench.h"
-
 #include "crypto/sha256.h"
 #include "key.h"
 #include "validation.h"
@@ -12,7 +13,7 @@
 #include "random.h"
 
 int
-main(int argc, char** argv)
+main(int argc, char **argv)
 {
     SHA256AutoDetect();
     RandomInit();
@@ -20,6 +21,7 @@ main(int argc, char** argv)
     SetupEnvironment();
     fPrintToDebugLog = false; // don't want to write to debug.log file
 
+    SelectParams(CBaseChainParams::MAIN);
     benchmark::BenchRunner::RunAll();
 
     ECC_Stop();

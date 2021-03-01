@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
-// Copyright (c) 2017 The Raven Core developers
+// Copyright (c) 2017-2020 The Raven Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -18,9 +18,25 @@
  * in the block is a special one that creates a new coin owned by the creator
  * of the block.
  */
+
+extern uint32_t nKAWPOWActivationTime;
+
+class BlockNetwork
+{
+public:
+    BlockNetwork();
+    bool fOnRegtest;
+    bool fOnTestnet;
+    void SetNetwork(const std::string& network);
+};
+
+extern BlockNetwork bNetwork;
+
+
 class CBlockHeader
 {
 public:
+
     // header
     int32_t nVersion;
     uint256 hashPrevBlock;
@@ -28,6 +44,11 @@ public:
     uint32_t nTime;
     uint32_t nBits;
     uint32_t nNonce;
+
+    //KAAAWWWPOW data
+    uint32_t nHeight;
+    uint64_t nNonce64;
+    uint256 mix_hash;
 
     CBlockHeader()
     {
@@ -43,7 +64,13 @@ public:
         READWRITE(hashMerkleRoot);
         READWRITE(nTime);
         READWRITE(nBits);
-        READWRITE(nNonce);
+        if (nTime < nKAWPOWActivationTime) {
+            READWRITE(nNonce);
+        } else {
+            READWRITE(nHeight);
+            READWRITE(nNonce64);
+            READWRITE(mix_hash);
+        }
     }
 
     void SetNull()
@@ -54,6 +81,10 @@ public:
         nTime = 0;
         nBits = 0;
         nNonce = 0;
+
+        nNonce64 = 0;
+        nHeight = 0;
+        mix_hash.SetNull();
     }
 
     bool IsNull() const
@@ -62,6 +93,17 @@ public:
     }
 
     uint256 GetHash() const;
+    uint256 GetX16RHash() const;
+    uint256 GetX16RV2Hash() const;
+
+    uint256 GetHashFull(uint256& mix_hash) const;
+    uint256 GetKAWPOWHeaderHash() const;
+    std::string ToString() const;
+
+    /// Use for testing algo switch
+    uint256 TestTiger() const;
+    uint256 TestSha512() const;
+    uint256 TestGost512() const;
 
     int64_t GetBlockTime() const
     {
@@ -78,6 +120,7 @@ public:
 
     // memory only
     mutable bool fChecked;
+
 
     CBlock()
     {
@@ -114,6 +157,11 @@ public:
         block.nTime          = nTime;
         block.nBits          = nBits;
         block.nNonce         = nNonce;
+
+        // KAWPOW
+        block.nHeight        = nHeight;
+        block.nNonce64       = nNonce64;
+        block.mix_hash       = mix_hash;
         return block;
     }
 
@@ -155,6 +203,32 @@ struct CBlockLocator
     bool IsNull() const
     {
         return vHave.empty();
+    }
+};
+
+/**
+ * Custom serializer for CBlockHeader that omits the nNonce and mixHash, for use
+ * as input to ProgPow.
+ */
+class CKAWPOWInput : private CBlockHeader
+{
+public:
+    CKAWPOWInput(const CBlockHeader &header)
+    {
+        CBlockHeader::SetNull();
+        *((CBlockHeader*)this) = header;
+    }
+
+    ADD_SERIALIZE_METHODS;
+
+    template <typename Stream, typename Operation>
+    inline void SerializationOp(Stream& s, Operation ser_action) {
+        READWRITE(this->nVersion);
+        READWRITE(hashPrevBlock);
+        READWRITE(hashMerkleRoot);
+        READWRITE(nTime);
+        READWRITE(nBits);
+        READWRITE(nHeight);
     }
 };
 

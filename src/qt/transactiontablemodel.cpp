@@ -1,5 +1,5 @@
 // Copyright (c) 2011-2016 The Bitcoin Core developers
-// Copyright (c) 2017 The Raven Core developers
+// Copyright (c) 2017-2019 The Raven Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -27,6 +27,10 @@
 #include <QIcon>
 #include <QList>
 
+// Fixing Boost 1.73 compile errors
+#include <boost/bind/bind.hpp>
+using namespace boost::placeholders;
+
 // Amount column is right-aligned it contains numbers
 static int column_alignments[] = {
         Qt::AlignLeft|Qt::AlignVCenter, /* status */
@@ -34,7 +38,8 @@ static int column_alignments[] = {
         Qt::AlignLeft|Qt::AlignVCenter, /* date */
         Qt::AlignLeft|Qt::AlignVCenter, /* type */
         Qt::AlignLeft|Qt::AlignVCenter, /* address */
-        Qt::AlignRight|Qt::AlignVCenter /* amount */
+        Qt::AlignRight|Qt::AlignVCenter,  /* amount */
+        Qt::AlignLeft|Qt::AlignVCenter /* assetName */
     };
 
 // Comparison operator for sort/binary search of model tx list
@@ -99,9 +104,9 @@ public:
         qDebug() << "TransactionTablePriv::updateWallet: " + QString::fromStdString(hash.ToString()) + " " + QString::number(status);
 
         // Find bounds of this transaction in model
-        QList<TransactionRecord>::iterator lower = qLowerBound(
+        QList<TransactionRecord>::iterator lower = std::lower_bound(
             cachedWallet.begin(), cachedWallet.end(), hash, TxLessThan());
-        QList<TransactionRecord>::iterator upper = qUpperBound(
+        QList<TransactionRecord>::iterator upper = std::upper_bound(
             cachedWallet.begin(), cachedWallet.end(), hash, TxLessThan());
         int lowerIndex = (lower - cachedWallet.begin());
         int upperIndex = (upper - cachedWallet.begin());
@@ -246,7 +251,8 @@ TransactionTableModel::TransactionTableModel(const PlatformStyle *_platformStyle
         fProcessingQueuedTransactions(false),
         platformStyle(_platformStyle)
 {
-    columns << QString() << QString() << tr("Date") << tr("Type") << tr("Label") << RavenUnits::getAmountColumnTitle(walletModel->getOptionsModel()->getDisplayUnit());
+    columns << QString() << QString() << tr("Date") << tr("Type") << tr("Label") << tr("Amount") << tr("Asset");
+
     priv->refreshWallet();
 
     connect(walletModel->getOptionsModel(), SIGNAL(displayUnitChanged(int)), this, SLOT(updateDisplayUnit()));
@@ -261,11 +267,11 @@ TransactionTableModel::~TransactionTableModel()
 }
 
 /** Updates the column title to "Amount (DisplayUnit)" and emits headerDataChanged() signal for table headers to react. */
-void TransactionTableModel::updateAmountColumnTitle()
-{
-    columns[Amount] = RavenUnits::getAmountColumnTitle(walletModel->getOptionsModel()->getDisplayUnit());
-    Q_EMIT headerDataChanged(Qt::Horizontal,Amount,Amount);
-}
+//void TransactionTableModel::updateAmountColumnTitle()
+//{
+//    columns[Amount] = RavenUnits::getAmountColumnTitle(walletModel->getOptionsModel()->getDisplayUnit());
+//    Q_EMIT headerDataChanged(Qt::Horizontal,Amount,Amount);
+//}
 
 void TransactionTableModel::updateTransaction(const QString &hash, int status, bool showTransaction)
 {
@@ -383,6 +389,14 @@ QString TransactionTableModel::formatTxType(const TransactionRecord *wtx) const
         return tr("Payment to yourself");
     case TransactionRecord::Generated:
         return tr("Mined");
+    case TransactionRecord::Issue:
+        return tr("Asset Issued");
+    case TransactionRecord::Reissue:
+        return tr("Asset Reissued");
+    case TransactionRecord::TransferFrom:
+        return tr("Assets Received");
+    case TransactionRecord::TransferTo:
+        return tr("Assets Sent");
     default:
         return QString();
     }
@@ -400,6 +414,12 @@ QVariant TransactionTableModel::txAddressDecoration(const TransactionRecord *wtx
     case TransactionRecord::SendToAddress:
     case TransactionRecord::SendToOther:
         return QIcon(":/icons/tx_output");
+    case TransactionRecord::Issue:
+    case TransactionRecord::Reissue:
+    case TransactionRecord::TransferFrom:
+        return QIcon(":/icons/tx_asset_input");
+    case TransactionRecord::TransferTo:
+        return QIcon(":/icons/tx_asset_output");
     default:
         return QIcon(":/icons/tx_inout");
     }
@@ -415,6 +435,11 @@ QString TransactionTableModel::formatTxToAddress(const TransactionRecord *wtx, b
 
     switch(wtx->type)
     {
+    case TransactionRecord::Issue:
+    case TransactionRecord::Reissue:
+    case TransactionRecord::TransferTo:
+    case TransactionRecord::TransferFrom:
+        return QString::fromStdString(wtx->address) + watchAddress;
     case TransactionRecord::RecvFromOther:
         return QString::fromStdString(wtx->address) + watchAddress;
     case TransactionRecord::RecvWithAddress:
@@ -452,11 +477,23 @@ QVariant TransactionTableModel::addressColor(const TransactionRecord *wtx) const
 
 QString TransactionTableModel::formatTxAmount(const TransactionRecord *wtx, bool showUnconfirmed, RavenUnits::SeparatorStyle separators) const
 {
-    QString str = RavenUnits::format(walletModel->getOptionsModel()->getDisplayUnit(), wtx->credit + wtx->debit, false, separators);
-    if(showUnconfirmed)
-    {
-        if(!wtx->status.countsForBalance)
-        {
+    QString str;
+    switch(wtx->type) {
+        case TransactionRecord::Issue:
+        case TransactionRecord::Reissue:
+        case TransactionRecord::TransferTo:
+        case TransactionRecord::TransferFrom:
+            {
+            str = QString::fromStdString(ValueFromAmountString(wtx->credit, wtx->units));
+            } break;
+        default:
+            {
+            str = RavenUnits::format(walletModel->getOptionsModel()->getDisplayUnit(), wtx->credit + wtx->debit,
+                                             false, separators);
+            } break;
+    }
+    if (showUnconfirmed) {
+        if (!wtx->status.countsForBalance) {
             str = QString("[") + str + QString("]");
         }
     }
@@ -538,6 +575,8 @@ QVariant TransactionTableModel::data(const QModelIndex &index, int role) const
             return txWatchonlyDecoration(rec);
         case ToAddress:
             return txAddressDecoration(rec);
+        case AssetName:
+            return QString::fromStdString(rec->assetName);
         }
         break;
     case Qt::DecorationRole:
@@ -556,6 +595,11 @@ QVariant TransactionTableModel::data(const QModelIndex &index, int role) const
             return formatTxToAddress(rec, false);
         case Amount:
             return formatTxAmount(rec, true, RavenUnits::separatorAlways);
+        case AssetName:
+            if (rec->assetName != "RVN")
+               return QString::fromStdString(rec->assetName);
+            else
+               return QString(RavenUnits::name(walletModel->getOptionsModel()->getDisplayUnit()));
         }
         break;
     case Qt::EditRole:
@@ -574,6 +618,8 @@ QVariant TransactionTableModel::data(const QModelIndex &index, int role) const
             return formatTxToAddress(rec, true);
         case Amount:
             return qint64(rec->credit + rec->debit);
+        case AssetName:
+            return QString::fromStdString(rec->assetName);
         }
         break;
     case Qt::ToolTipRole:
@@ -598,6 +644,11 @@ QVariant TransactionTableModel::data(const QModelIndex &index, int role) const
         if(index.column() == ToAddress)
         {
             return addressColor(rec);
+        }
+        if(index.column() == AssetName)
+        {
+            if (rec->assetName != "RVN")
+               return platformStyle->AssetTxColor();
         }
         break;
     case TypeRole:
@@ -655,6 +706,15 @@ QVariant TransactionTableModel::data(const QModelIndex &index, int role) const
     case FormattedAmountRole:
         // Used for copy/export, so don't include separators
         return formatTxAmount(rec, false, RavenUnits::separatorNever);
+    case AssetNameRole:
+        {
+            QString assetName;
+            if (rec->assetName != "RVN")
+               assetName.append(QString::fromStdString(rec->assetName));
+            else
+               assetName.append(QString(RavenUnits::name(walletModel->getOptionsModel()->getDisplayUnit())));
+            return assetName;
+        }
     case StatusRole:
         return rec->status.status;
     }
@@ -688,6 +748,8 @@ QVariant TransactionTableModel::headerData(int section, Qt::Orientation orientat
                 return tr("User-defined intent/purpose of the transaction.");
             case Amount:
                 return tr("Amount removed from or added to balance.");
+            case AssetName:
+                return tr("The asset (or RVN) removed or added to balance.");
             }
         }
     }
@@ -708,7 +770,7 @@ QModelIndex TransactionTableModel::index(int row, int column, const QModelIndex 
 void TransactionTableModel::updateDisplayUnit()
 {
     // emit dataChanged to update Amount column with the current unit
-    updateAmountColumnTitle();
+    //updateAmountColumnTitle();
     Q_EMIT dataChanged(index(0, Amount), index(priv->size()-1, Amount));
 }
 

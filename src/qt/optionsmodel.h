@@ -1,5 +1,5 @@
 // Copyright (c) 2011-2016 The Bitcoin Core developers
-// Copyright (c) 2017 The Raven Core developers
+// Copyright (c) 2017-2019 The Raven Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -47,6 +47,8 @@ public:
         DatabaseCache,          // int
         SpendZeroConfChange,    // bool
         Listen,                 // bool
+        CustomFeeFeatures,      // bool
+        DarkModeEnabled,        // bool
         OptionIDRowCount,
     };
 
@@ -67,6 +69,8 @@ public:
     QString getThirdPartyTxUrls() const { return strThirdPartyTxUrls; }
     bool getProxySettings(QNetworkProxy& proxy) const;
     bool getCoinControlFeatures() const { return fCoinControlFeatures; }
+    bool getCustomFeeFeatures() const { return fCustomFeeFeatures; }
+    bool getDarkModeEnabled() const { return fDarkModeEnabled; }
     const QString& getOverriddenByCommandLine() { return strOverriddenByCommandLine; }
 
     /* Restart flag helper */
@@ -82,6 +86,10 @@ private:
     int nDisplayUnit;
     QString strThirdPartyTxUrls;
     bool fCoinControlFeatures;
+    /** RVN START*/
+    bool fCustomFeeFeatures;
+    bool fDarkModeEnabled;
+    /** RVN END*/
     /* settings that were overridden by command-line */
     QString strOverriddenByCommandLine;
 
@@ -93,6 +101,7 @@ private:
 Q_SIGNALS:
     void displayUnitChanged(int unit);
     void coinControlFeaturesChanged(bool);
+    void customFeeFeaturesChanged(bool);
     void hideTrayIconChanged(bool);
 };
 

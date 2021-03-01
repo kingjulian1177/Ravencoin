@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
-// Copyright (c) 2017 The Raven Core developers
+// Copyright (c) 2017-2020 The Raven Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -52,17 +52,20 @@ CAmount GetDustThreshold(const CTxOut& txout, const CFeeRate& dustRelayFeeIn)
 
 bool IsDust(const CTxOut& txout, const CFeeRate& dustRelayFeeIn)
 {
-    return (txout.nValue < GetDustThreshold(txout, dustRelayFeeIn));
+
+    if (txout.scriptPubKey.IsAssetScript())
+        return false;
+    else
+        return (txout.nValue < GetDustThreshold(txout, dustRelayFeeIn));
 }
 
-bool IsStandard(const CScript& scriptPubKey, txnouttype& whichType, const bool witnessEnabled)
-{
+bool IsStandard(const CScript& scriptPubKey, txnouttype& whichType, const bool witnessEnabled) {
     std::vector<std::vector<unsigned char> > vSolutions;
     if (!Solver(scriptPubKey, whichType, vSolutions))
         return false;
 
-    if (whichType == TX_MULTISIG)
-    {
+
+    if (whichType == TX_MULTISIG) {
         unsigned char m = vSolutions.front()[0];
         unsigned char n = vSolutions.back()[0];
         // Support up to x-of-3 multisig txns as standard
@@ -72,12 +75,13 @@ bool IsStandard(const CScript& scriptPubKey, txnouttype& whichType, const bool w
             return false;
     } else if (whichType == TX_NULL_DATA &&
                (!fAcceptDatacarrier || scriptPubKey.size() > nMaxDatacarrierBytes))
-          return false;
-
+        return false;
+    else if (whichType == TX_RESTRICTED_ASSET_DATA && scriptPubKey.size() > MAX_OP_RETURN_RELAY)
+        return false;
     else if (!witnessEnabled && (whichType == TX_WITNESS_V0_KEYHASH || whichType == TX_WITNESS_V0_SCRIPTHASH))
         return false;
 
-    return whichType != TX_NONSTANDARD && whichType != TX_WITNESS_UNKNOWN;
+    return whichType != TX_NONSTANDARD ;
 }
 
 bool IsStandardTx(const CTransaction& tx, std::string& reason, const bool witnessEnabled)
@@ -117,6 +121,7 @@ bool IsStandardTx(const CTransaction& tx, std::string& reason, const bool witnes
     }
 
     unsigned int nDataOut = 0;
+    unsigned int nAssetDataOut = 0;
     txnouttype whichType;
     for (const CTxOut& txout : tx.vout) {
         if (!::IsStandard(txout.scriptPubKey, whichType, witnessEnabled)) {
@@ -126,6 +131,8 @@ bool IsStandardTx(const CTransaction& tx, std::string& reason, const bool witnes
 
         if (whichType == TX_NULL_DATA)
             nDataOut++;
+        else if (whichType == TX_RESTRICTED_ASSET_DATA)
+            nAssetDataOut++;
         else if ((whichType == TX_MULTISIG) && (!fIsBareMultisigStd)) {
             reason = "bare-multisig";
             return false;
@@ -138,6 +145,12 @@ bool IsStandardTx(const CTransaction& tx, std::string& reason, const bool witnes
     // only one OP_RETURN txout is permitted
     if (nDataOut > 1) {
         reason = "multi-op-return";
+        return false;
+    }
+
+    // only one hundred OP_RAVEN_ASSET txout is permitted
+    if (nAssetDataOut > 100) {
+        reason = "tomany-op-rvn-asset";
         return false;
     }
 

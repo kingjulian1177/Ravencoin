@@ -1,5 +1,5 @@
 // Copyright (c) 2011-2016 The Bitcoin Core developers
-// Copyright (c) 2017 The Raven Core developers
+// Copyright (c) 2017-2019 The Raven Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -18,6 +18,10 @@ class CCoinControl
 {
 public:
     CTxDestination destChange;
+
+    //! If set, all asset change will be sent to this address, if not destChange will be used
+    CTxDestination assetDestChange;
+
     //! If false, allows unselected inputs, but requires all selected inputs be used
     bool fAllowOtherInputs;
     //! Includes watch only addresses which match the ISMINE_WATCH_SOLVABLE criteria
@@ -33,6 +37,11 @@ public:
     //! Fee estimation mode to control arguments to estimateSmartFee
     FeeEstimateMode m_fee_mode;
 
+    /** RVN START */
+    //! Name of the asset that is selected, used when sending assets with coincontrol
+    std::string strAssetSelected;
+    /** RVN END */
+
     CCoinControl()
     {
         SetNull();
@@ -41,6 +50,7 @@ public:
     void SetNull()
     {
         destChange = CNoDestination();
+        assetDestChange = CNoDestination();
         fAllowOtherInputs = false;
         fAllowWatchOnly = false;
         setSelected.clear();
@@ -49,6 +59,8 @@ public:
         m_confirm_target.reset();
         signalRbf = fWalletRbf;
         m_fee_mode = FeeEstimateMode::UNSET;
+        strAssetSelected = "";
+        setAssetsSelected.clear();
     }
 
     bool HasSelected() const
@@ -56,9 +68,19 @@ public:
         return (setSelected.size() > 0);
     }
 
+    bool HasAssetSelected() const
+    {
+        return (setAssetsSelected.size() > 0);
+    }
+
     bool IsSelected(const COutPoint& output) const
     {
         return (setSelected.count(output) > 0);
+    }
+
+    bool IsAssetSelected(const COutPoint& output) const
+    {
+        return (setAssetsSelected.count(output) > 0);
     }
 
     void Select(const COutPoint& output)
@@ -66,14 +88,31 @@ public:
         setSelected.insert(output);
     }
 
+    void SelectAsset(const COutPoint& output)
+    {
+        setAssetsSelected.insert(output);
+    }
+
+
     void UnSelect(const COutPoint& output)
     {
         setSelected.erase(output);
+        if (!setSelected.size())
+            strAssetSelected = "";
+    }
+
+    void UnSelectAsset(const COutPoint& output)
+    {
+        setAssetsSelected.erase(output);
+        if (!setSelected.size())
+            strAssetSelected = "";
     }
 
     void UnSelectAll()
     {
         setSelected.clear();
+        strAssetSelected = "";
+        setAssetsSelected.clear();
     }
 
     void ListSelected(std::vector<COutPoint>& vOutpoints) const
@@ -81,8 +120,14 @@ public:
         vOutpoints.assign(setSelected.begin(), setSelected.end());
     }
 
+    void ListSelectedAssets(std::vector<COutPoint>& vOutpoints) const
+    {
+        vOutpoints.assign(setAssetsSelected.begin(), setAssetsSelected.end());
+    }
+
 private:
     std::set<COutPoint> setSelected;
+    std::set<COutPoint> setAssetsSelected;
 };
 
 #endif // RAVEN_WALLET_COINCONTROL_H

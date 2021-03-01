@@ -1,5 +1,5 @@
 // Copyright (c) 2011-2016 The Bitcoin Core developers
-// Copyright (c) 2017 The Raven Core developers
+// Copyright (c) 2017-2019 The Raven Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -103,6 +103,12 @@ ReceiveRequestDialog::ReceiveRequestDialog(QWidget *parent) :
 #endif
 
     connect(ui->btnSaveAs, SIGNAL(clicked()), ui->lblQRCode, SLOT(saveImage()));
+
+    ui->outUri->setFont(GUIUtil::getSubLabelFont());
+    ui->btnCopyURI->setFont(GUIUtil::getSubLabelFont());
+    ui->btnCopyAddress->setFont(GUIUtil::getSubLabelFont());
+    ui->btnSaveAs->setFont(GUIUtil::getSubLabelFont());
+    ui->buttonBox->setFont(GUIUtil::getSubLabelFont());
 }
 
 ReceiveRequestDialog::~ReceiveRequestDialog()

@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
-// Copyright (c) 2017 The Raven Core developers
+// Copyright (c) 2017-2019 The Raven Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 #ifndef RAVEN_POLICYESTIMATOR_H
@@ -15,6 +15,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <array>
 
 class CAutoFile;
 class CFeeRate;
@@ -95,9 +96,9 @@ std::string StringForFeeReason(FeeReason reason);
 
 /* Used to determine type of fee estimation requested */
 enum class FeeEstimateMode {
-    UNSET,        //! Use default settings based on other criteria
-    ECONOMICAL,   //! Force estimateSmartFee to use non-conservative estimates
-    CONSERVATIVE, //! Force estimateSmartFee to use conservative estimates
+    UNSET,        //!< Use default settings based on other criteria
+    ECONOMICAL,   //!< Force estimateSmartFee to use non-conservative estimates
+    CONSERVATIVE, //!< Force estimateSmartFee to use conservative estimates
 };
 
 bool FeeModeFromString(const std::string& mode_string, FeeEstimateMode& fee_estimate_mode);
@@ -294,5 +295,10 @@ private:
     std::set<double> feeset;
     FastRandomContext insecure_rand;
 };
+
+
+static const std::array<int, 9> confTargets = { {2, 4, 6, 12, 24, 48, 144, 504, 1008} };
+int getConfTargetForIndex(int index);
+int getIndexForConfTarget(int target);
 
 #endif /*RAVEN_POLICYESTIMATOR_H */

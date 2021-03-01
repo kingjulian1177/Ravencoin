@@ -1,5 +1,5 @@
 // Copyright (c) 2011-2016 The Bitcoin Core developers
-// Copyright (c) 2017 The Raven Core developers
+// Copyright (c) 2017-2020 The Raven Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -26,6 +26,7 @@
 #ifdef ENABLE_WALLET
 #include "walletframe.h"
 #include "walletmodel.h"
+#include "mnemonicdialog.h"
 #endif // ENABLE_WALLET
 
 #ifdef Q_OS_MAC
@@ -36,19 +37,29 @@
 #include "init.h"
 #include "ui_interface.h"
 #include "util.h"
+#include "core_io.h"
+#include "darkstyle.h"
 
 #include <iostream>
 
+#include <QDebug>
+#include <QtNetwork/QNetworkAccessManager>
+#include <QtNetwork/QNetworkReply>
+#include <QGraphicsDropShadowEffect>
+#include <QToolButton>
+#include <QPushButton>
+#include <QPainter>
+#include <QWidgetAction>
 #include <QAction>
 #include <QApplication>
 #include <QDateTime>
-#include <QDesktopWidget>
 #include <QDragEnterEvent>
 #include <QListWidget>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMimeData>
 #include <QProgressDialog>
+#include <QScreen>
 #include <QSettings>
 #include <QShortcut>
 #include <QStackedWidget>
@@ -58,11 +69,25 @@
 #include <QToolBar>
 #include <QVBoxLayout>
 
-#if QT_VERSION < 0x050000
+// Fixing Boost 1.73 compile errors
+#include <boost/bind/bind.hpp>
+using namespace boost::placeholders;
+
+#if QT_VERSION < QT_VERSION_CHECK(5, 0, 0)
 #include <QTextDocument>
 #include <QUrl>
 #else
 #include <QUrlQuery>
+#include <validation.h>
+#include <tinyformat.h>
+#include <QFontDatabase>
+#include <univalue/include/univalue.h>
+#include <QDesktopServices>
+
+#endif
+
+#if QT_VERSION < QT_VERSION_CHECK(5, 11, 0)
+#define QTversionPreFiveEleven
 #endif
 
 const std::string RavenGUI::DEFAULT_UIPLATFORM =
@@ -112,8 +137,24 @@ RavenGUI::RavenGUI(const PlatformStyle *_platformStyle, const NetworkStyle *netw
     changePassphraseAction(0),
     aboutQtAction(0),
     openRPCConsoleAction(0),
+    openWalletRepairAction(0),
     openAction(0),
     showHelpMessageAction(0),
+    transferAssetAction(0),
+    createAssetAction(0),
+    manageAssetAction(0),
+    messagingAction(0),
+    votingAction(0),
+    restrictedAssetAction(0),
+    headerWidget(0),
+    labelCurrentMarket(0),
+    labelCurrentPrice(0),
+    pricingTimer(0),
+    networkManager(0),
+    request(0),
+    labelVersionUpdate(0),
+    networkVersionManager(0),
+    versionRequest(0),
     trayIcon(0),
     trayIconMenu(0),
     notificator(0),
@@ -123,11 +164,12 @@ RavenGUI::RavenGUI(const PlatformStyle *_platformStyle, const NetworkStyle *netw
     prevBlocks(0),
     spinnerFrame(0),
     platformStyle(_platformStyle)
+
 {
     QSettings settings;
     if (!restoreGeometry(settings.value("MainWindowGeometry").toByteArray())) {
         // Restore failed (perhaps missing setting), center the window
-        move(QApplication::desktop()->availableGeometry().center() - frameGeometry().center());
+        move(QGuiApplication::primaryScreen()->availableGeometry().center() - frameGeometry().center());
     }
 
     QString windowTitle = tr(PACKAGE_NAME) + " - ";
@@ -172,8 +214,26 @@ RavenGUI::RavenGUI(const PlatformStyle *_platformStyle, const NetworkStyle *netw
         setCentralWidget(rpcConsole);
     }
 
+    /** RVN START */
+    labelCurrentMarket = new QLabel();
+    labelCurrentPrice = new QLabel();
+    headerWidget = new QWidget();
+    pricingTimer = new QTimer();
+    networkManager = new QNetworkAccessManager();
+    request = new QNetworkRequest();
+    labelVersionUpdate = new QLabel();
+    networkVersionManager = new QNetworkAccessManager();
+    versionRequest = new QNetworkRequest();
+    /** RVN END */
+
     // Accept D&D of URIs
     setAcceptDrops(true);
+
+    loadFonts();
+
+#if !defined(Q_OS_MAC)
+    this->setFont(QFont("Open Sans"));
+#endif
 
     // Create actions for the toolbar, menu bar and tray/dock icon
     // Needs walletFrame to be initialized
@@ -223,6 +283,7 @@ RavenGUI::RavenGUI(const PlatformStyle *_platformStyle, const NetworkStyle *netw
     // Progress bar and label for blocks download
     progressBarLabel = new QLabel();
     progressBarLabel->setVisible(false);
+    progressBarLabel->setStyleSheet(QString(".QLabel { color : %1; }").arg(platformStyle->TextColor().name()));
     progressBar = new GUIUtil::ProgressBar();
     progressBar->setAlignment(Qt::AlignCenter);
     progressBar->setVisible(false);
@@ -239,6 +300,9 @@ RavenGUI::RavenGUI(const PlatformStyle *_platformStyle, const NetworkStyle *netw
     statusBar()->addWidget(progressBarLabel);
     statusBar()->addWidget(progressBar);
     statusBar()->addPermanentWidget(frameBlocks);
+
+    if(darkModeEnabled)
+        statusBar()->setStyleSheet(QString(".QStatusBar{background-color: %1; border-top: 1px solid %2;}").arg(platformStyle->TopWidgetBackGroundColor().name(), platformStyle->TextColor().name()));
 
     // Install event filter to be able to catch status tip events (QEvent::StatusTip)
     this->installEventFilter(this);
@@ -278,45 +342,123 @@ RavenGUI::~RavenGUI()
     delete rpcConsole;
 }
 
+void RavenGUI::loadFonts()
+{
+    QFontDatabase::addApplicationFont(":/fonts/opensans-bold");
+    QFontDatabase::addApplicationFont(":/fonts/opensans-bolditalic");
+    QFontDatabase::addApplicationFont(":/fonts/opensans-extrabold");
+    QFontDatabase::addApplicationFont(":/fonts/opensans-extrabolditalic");
+    QFontDatabase::addApplicationFont(":/fonts/opensans-italic");
+    QFontDatabase::addApplicationFont(":/fonts/opensans-light");
+    QFontDatabase::addApplicationFont(":/fonts/opensans-lightitalic");
+    QFontDatabase::addApplicationFont(":/fonts/opensans-regular");
+    QFontDatabase::addApplicationFont(":/fonts/opensans-semibold");
+    QFontDatabase::addApplicationFont(":/fonts/opensans-semibolditalic");
+}
+
+
 void RavenGUI::createActions()
 {
+    QFont font = QFont();
+    font.setPixelSize(22);
+    font.setLetterSpacing(QFont::SpacingType::AbsoluteSpacing, -0.43);
+#if !defined(Q_OS_MAC)
+    font.setFamily("Open Sans");
+#endif
+    font.setWeight(QFont::Weight::ExtraLight);
+
     QActionGroup *tabGroup = new QActionGroup(this);
 
-    overviewAction = new QAction(platformStyle->SingleColorIcon(":/icons/overview"), tr("&Overview"), this);
+    overviewAction = new QAction(platformStyle->SingleColorIconOnOff(":/icons/overview_selected", ":/icons/overview"), tr("&Overview"), this);
     overviewAction->setStatusTip(tr("Show general overview of wallet"));
     overviewAction->setToolTip(overviewAction->statusTip());
     overviewAction->setCheckable(true);
     overviewAction->setShortcut(QKeySequence(Qt::ALT + Qt::Key_1));
+    overviewAction->setFont(font);
     tabGroup->addAction(overviewAction);
 
-    sendCoinsAction = new QAction(platformStyle->SingleColorIcon(":/icons/send"), tr("&Send"), this);
+    sendCoinsAction = new QAction(platformStyle->SingleColorIconOnOff(":/icons/send_selected", ":/icons/send"), tr("&Send"), this);
     sendCoinsAction->setStatusTip(tr("Send coins to a Raven address"));
     sendCoinsAction->setToolTip(sendCoinsAction->statusTip());
     sendCoinsAction->setCheckable(true);
     sendCoinsAction->setShortcut(QKeySequence(Qt::ALT + Qt::Key_2));
+    sendCoinsAction->setFont(font);
     tabGroup->addAction(sendCoinsAction);
 
     sendCoinsMenuAction = new QAction(platformStyle->TextColorIcon(":/icons/send"), sendCoinsAction->text(), this);
     sendCoinsMenuAction->setStatusTip(sendCoinsAction->statusTip());
     sendCoinsMenuAction->setToolTip(sendCoinsMenuAction->statusTip());
 
-    receiveCoinsAction = new QAction(platformStyle->SingleColorIcon(":/icons/receiving_addresses"), tr("&Receive"), this);
+    receiveCoinsAction = new QAction(platformStyle->SingleColorIconOnOff(":/icons/receiving_addresses_selected", ":/icons/receiving_addresses"), tr("&Receive"), this);
     receiveCoinsAction->setStatusTip(tr("Request payments (generates QR codes and raven: URIs)"));
     receiveCoinsAction->setToolTip(receiveCoinsAction->statusTip());
     receiveCoinsAction->setCheckable(true);
     receiveCoinsAction->setShortcut(QKeySequence(Qt::ALT + Qt::Key_3));
+    receiveCoinsAction->setFont(font);
     tabGroup->addAction(receiveCoinsAction);
 
     receiveCoinsMenuAction = new QAction(platformStyle->TextColorIcon(":/icons/receiving_addresses"), receiveCoinsAction->text(), this);
     receiveCoinsMenuAction->setStatusTip(receiveCoinsAction->statusTip());
     receiveCoinsMenuAction->setToolTip(receiveCoinsMenuAction->statusTip());
 
-    historyAction = new QAction(platformStyle->SingleColorIcon(":/icons/history"), tr("&Transactions"), this);
+    historyAction = new QAction(platformStyle->SingleColorIconOnOff(":/icons/history_selected", ":/icons/history"), tr("&Transactions"), this);
     historyAction->setStatusTip(tr("Browse transaction history"));
     historyAction->setToolTip(historyAction->statusTip());
     historyAction->setCheckable(true);
     historyAction->setShortcut(QKeySequence(Qt::ALT + Qt::Key_4));
+    historyAction->setFont(font);
     tabGroup->addAction(historyAction);
+
+    /** RVN START */
+    transferAssetAction = new QAction(platformStyle->SingleColorIconOnOff(":/icons/asset_transfer_selected", ":/icons/asset_transfer"), tr("&Transfer Assets"), this);
+    transferAssetAction->setStatusTip(tr("Transfer assets to RVN addresses"));
+    transferAssetAction->setToolTip(transferAssetAction->statusTip());
+    transferAssetAction->setCheckable(true);
+    transferAssetAction->setShortcut(QKeySequence(Qt::ALT + Qt::Key_5));
+    transferAssetAction->setFont(font);
+    tabGroup->addAction(transferAssetAction);
+
+    createAssetAction = new QAction(platformStyle->SingleColorIconOnOff(":/icons/asset_create_selected", ":/icons/asset_create"), tr("&Create Assets"), this);
+    createAssetAction->setStatusTip(tr("Create new main/sub/unique assets"));
+    createAssetAction->setToolTip(createAssetAction->statusTip());
+    createAssetAction->setCheckable(true);
+    createAssetAction->setShortcut(QKeySequence(Qt::ALT + Qt::Key_6));
+    createAssetAction->setFont(font);
+    tabGroup->addAction(createAssetAction);
+
+    manageAssetAction = new QAction(platformStyle->SingleColorIconOnOff(":/icons/asset_manage_selected", ":/icons/asset_manage"), tr("&Manage Assets"), this);
+    manageAssetAction->setStatusTip(tr("Manage assets you are the administrator of"));
+    manageAssetAction->setToolTip(manageAssetAction->statusTip());
+    manageAssetAction->setCheckable(true);
+    manageAssetAction->setShortcut(QKeySequence(Qt::ALT + Qt::Key_7));
+    manageAssetAction->setFont(font);
+    tabGroup->addAction(manageAssetAction);
+
+    messagingAction = new QAction(platformStyle->SingleColorIcon(":/icons/editcopy"), tr("&Messaging"), this);
+    messagingAction->setStatusTip(tr("Coming Soon"));
+    messagingAction->setToolTip(messagingAction->statusTip());
+    messagingAction->setCheckable(true);
+    messagingAction->setShortcut(QKeySequence(Qt::ALT + Qt::Key_8));
+    messagingAction->setFont(font);
+    tabGroup->addAction(messagingAction);
+
+    votingAction = new QAction(platformStyle->SingleColorIcon(":/icons/edit"), tr("&Voting"), this);
+    votingAction->setStatusTip(tr("Coming Soon"));
+    votingAction->setToolTip(votingAction->statusTip());
+    votingAction->setCheckable(true);
+    votingAction->setShortcut(QKeySequence(Qt::ALT + Qt::Key_9));
+    votingAction->setFont(font);
+    tabGroup->addAction(votingAction);
+
+    restrictedAssetAction = new QAction(platformStyle->SingleColorIcon(":/icons/edit"), tr("&Restricted Assets"), this);
+    restrictedAssetAction->setStatusTip(tr("Manage restricted assets"));
+    restrictedAssetAction->setToolTip(restrictedAssetAction->statusTip());
+    restrictedAssetAction->setCheckable(true);
+//    restrictedAssetAction->setShortcut(QKeySequence(Qt::ALT + Qt::Key_9));
+    restrictedAssetAction->setFont(font);
+    tabGroup->addAction(restrictedAssetAction);
+
+    /** RVN END */
 
 #ifdef ENABLE_WALLET
     // These showNormalIfMinimized are needed because Send Coins and Receive Coins
@@ -333,6 +475,16 @@ void RavenGUI::createActions()
     connect(receiveCoinsMenuAction, SIGNAL(triggered()), this, SLOT(gotoReceiveCoinsPage()));
     connect(historyAction, SIGNAL(triggered()), this, SLOT(showNormalIfMinimized()));
     connect(historyAction, SIGNAL(triggered()), this, SLOT(gotoHistoryPage()));
+    connect(transferAssetAction, SIGNAL(triggered()), this, SLOT(showNormalIfMinimized()));
+    connect(transferAssetAction, SIGNAL(triggered()), this, SLOT(gotoAssetsPage()));
+    connect(createAssetAction, SIGNAL(triggered()), this, SLOT(showNormalIfMinimized()));
+    connect(createAssetAction, SIGNAL(triggered()), this, SLOT(gotoCreateAssetsPage()));
+    connect(manageAssetAction, SIGNAL(triggered()), this, SLOT(showNormalIfMinimized()));
+    connect(manageAssetAction, SIGNAL(triggered()), this, SLOT(gotoManageAssetsPage()));
+    connect(restrictedAssetAction, SIGNAL(triggered()), this, SLOT(showNormalIfMinimized()));
+    connect(restrictedAssetAction, SIGNAL(triggered()), this, SLOT(gotoRestrictedAssetsPage()));
+    // TODO add messaging actions to go to messaging page when clicked
+    // TODO add voting actions to go to voting page when clicked
 #endif // ENABLE_WALLET
 
     quitAction = new QAction(platformStyle->TextColorIcon(":/icons/quit"), tr("E&xit"), this);
@@ -365,10 +517,13 @@ void RavenGUI::createActions()
     verifyMessageAction = new QAction(platformStyle->TextColorIcon(":/icons/verify"), tr("&Verify message..."), this);
     verifyMessageAction->setStatusTip(tr("Verify messages to ensure they were signed with specified Raven addresses"));
 
-    openRPCConsoleAction = new QAction(platformStyle->TextColorIcon(":/icons/debugwindow"), tr("&Debug window"), this);
+    openRPCConsoleAction = new QAction(platformStyle->TextColorIcon(":/icons/debugwindow"), tr("&Debug Window"), this);
     openRPCConsoleAction->setStatusTip(tr("Open debugging and diagnostic console"));
     // initially disable the debug window menu item
     openRPCConsoleAction->setEnabled(false);
+
+    openWalletRepairAction = new QAction(platformStyle->TextColorIcon(":/icons/debugwindow"), tr("&Wallet Repair"), this);
+    openWalletRepairAction->setStatusTip(tr("Open wallet repair options"));
 
     usedSendingAddressesAction = new QAction(platformStyle->TextColorIcon(":/icons/address-book"), tr("&Sending addresses..."), this);
     usedSendingAddressesAction->setStatusTip(tr("Show the list of used sending addresses and labels"));
@@ -389,6 +544,9 @@ void RavenGUI::createActions()
     connect(toggleHideAction, SIGNAL(triggered()), this, SLOT(toggleHidden()));
     connect(showHelpMessageAction, SIGNAL(triggered()), this, SLOT(showHelpMessageClicked()));
     connect(openRPCConsoleAction, SIGNAL(triggered()), this, SLOT(showDebugWindow()));
+    connect(openWalletRepairAction, SIGNAL(triggered()), this, SLOT(showWalletRepair()));
+    // Get restart command-line parameters and handle restart
+    connect(rpcConsole, SIGNAL(handleRestart(QStringList)), this, SLOT(handleRestart(QStringList)));
     // prevents an open debug window from becoming stuck/unusable on client shutdown
     connect(quitAction, SIGNAL(triggered()), rpcConsole, SLOT(hide()));
 
@@ -425,7 +583,6 @@ void RavenGUI::createMenuBar()
     if(walletFrame)
     {
         file->addAction(openAction);
-        file->addAction(backupWalletAction);
         file->addAction(signMessageAction);
         file->addAction(verifyMessageAction);
         file->addSeparator();
@@ -435,10 +592,11 @@ void RavenGUI::createMenuBar()
     }
     file->addAction(quitAction);
 
-    QMenu *settings = appMenuBar->addMenu(tr("&Settings"));
+    QMenu *settings = appMenuBar->addMenu(tr("&Wallet"));
     if(walletFrame)
     {
         settings->addAction(encryptWalletAction);
+        settings->addAction(backupWalletAction);
         settings->addAction(changePassphraseAction);
         settings->addSeparator();
     }
@@ -448,6 +606,7 @@ void RavenGUI::createMenuBar()
     if(walletFrame)
     {
         help->addAction(openRPCConsoleAction);
+        help->addAction(openWalletRepairAction);
     }
     help->addAction(showHelpMessageAction);
     help->addSeparator();
@@ -459,7 +618,23 @@ void RavenGUI::createToolBars()
 {
     if(walletFrame)
     {
-        QToolBar *toolbar = addToolBar(tr("Tabs toolbar"));
+        /** RVN START */
+        // Create the orange background and the vertical tool bar
+        QWidget* toolbarWidget = new QWidget();
+
+        QString widgetStyleSheet = ".QWidget {background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 %1, stop: 1 %2);}";
+
+        toolbarWidget->setStyleSheet(widgetStyleSheet.arg(platformStyle->LightBlueColor().name(), platformStyle->DarkBlueColor().name()));
+
+        QLabel* label = new QLabel();
+        label->setPixmap(QPixmap::fromImage(QImage(":/icons/ravencointext")));
+        label->setContentsMargins(0,0,0,50);
+        label->setStyleSheet(".QLabel{background-color: transparent;}");
+        /** RVN END */
+
+        QToolBar *toolbar = new QToolBar();
+        toolbar->setStyle(style());
+        toolbar->setMinimumWidth(label->width());
         toolbar->setContextMenuPolicy(Qt::PreventContextMenu);
         toolbar->setMovable(false);
         toolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
@@ -467,7 +642,288 @@ void RavenGUI::createToolBars()
         toolbar->addAction(sendCoinsAction);
         toolbar->addAction(receiveCoinsAction);
         toolbar->addAction(historyAction);
+        toolbar->addAction(createAssetAction);
+        toolbar->addAction(transferAssetAction);
+        toolbar->addAction(manageAssetAction);
+//        toolbar->addAction(messagingAction);
+//        toolbar->addAction(votingAction);
+        toolbar->addAction(restrictedAssetAction);
+
+        QString openSansFontString = "font: normal 22pt \"Open Sans\";";
+        QString normalString = "font: normal 22pt \"Arial\";";
+        QString stringToUse = "";
+
+#if !defined(Q_OS_MAC)
+        stringToUse = openSansFontString;
+#else
+        stringToUse = normalString;
+#endif
+
+        /** RVN START */
+        QString tbStyleSheet = ".QToolBar {background-color : transparent; border-color: transparent; }  "
+                               ".QToolButton {background-color: transparent; border-color: transparent; width: 249px; color: %1; border: none;} "
+                               ".QToolButton:checked {background: none; background-color: none; selection-background-color: none; color: %2; border: none; font: %4} "
+                               ".QToolButton:hover {background: none; background-color: none; border: none; color: %3;} "
+                               ".QToolButton:disabled {color: gray;}";
+
+        toolbar->setStyleSheet(tbStyleSheet.arg(platformStyle->ToolBarNotSelectedTextColor().name(),
+                                                platformStyle->ToolBarSelectedTextColor().name(),
+                                                platformStyle->DarkOrangeColor().name(), stringToUse));
+
+        toolbar->setOrientation(Qt::Vertical);
+        toolbar->setIconSize(QSize(40, 40));
+
+        QLayout* lay = toolbar->layout();
+        for(int i = 0; i < lay->count(); ++i)
+            lay->itemAt(i)->setAlignment(Qt::AlignLeft);
+
         overviewAction->setChecked(true);
+
+        QVBoxLayout* ravenLabelLayout = new QVBoxLayout(toolbarWidget);
+        ravenLabelLayout->addWidget(label);
+        ravenLabelLayout->addWidget(toolbar);
+        ravenLabelLayout->setDirection(QBoxLayout::TopToBottom);
+        ravenLabelLayout->addStretch(1);
+
+        QString mainWalletWidgetStyle = QString(".QWidget{background-color: %1}").arg(platformStyle->MainBackGroundColor().name());
+        QWidget* mainWalletWidget = new QWidget();
+        mainWalletWidget->setStyleSheet(mainWalletWidgetStyle);
+
+        /** Create the shadow effects for the main wallet frame. Make it so it puts a shadow on the tool bar */
+#if !defined(Q_OS_MAC)
+        QGraphicsDropShadowEffect *walletFrameShadow = new QGraphicsDropShadowEffect;
+        walletFrameShadow->setBlurRadius(50);
+        walletFrameShadow->setColor(COLOR_WALLETFRAME_SHADOW);
+        walletFrameShadow->setXOffset(-8.0);
+        walletFrameShadow->setYOffset(0);
+        mainWalletWidget->setGraphicsEffect(walletFrameShadow);
+#endif
+
+        QString widgetBackgroundSytleSheet = QString(".QWidget{background-color: %1}").arg(platformStyle->TopWidgetBackGroundColor().name());
+
+        // Set the headers widget options
+        headerWidget->setContentsMargins(0,0,0,50);
+        headerWidget->setStyleSheet(widgetBackgroundSytleSheet);
+        headerWidget->setGraphicsEffect(GUIUtil::getShadowEffect());
+        headerWidget->setFixedHeight(75);
+
+        QFont currentMarketFont;
+        currentMarketFont.setFamily("Open Sans");
+        currentMarketFont.setWeight(QFont::Weight::Normal);
+        currentMarketFont.setLetterSpacing(QFont::SpacingType::AbsoluteSpacing, -0.6);
+        currentMarketFont.setPixelSize(18);
+
+        // Set the pricing information
+        QHBoxLayout* priceLayout = new QHBoxLayout(headerWidget);
+        priceLayout->setContentsMargins(QMargins());
+        priceLayout->setDirection(QBoxLayout::LeftToRight);
+        priceLayout->setAlignment(Qt::AlignVCenter);
+        labelCurrentMarket->setContentsMargins(50,0,0,0);
+        labelCurrentMarket->setFixedHeight(75);
+        labelCurrentMarket->setAlignment(Qt::AlignVCenter);
+        labelCurrentMarket->setStyleSheet(STRING_LABEL_COLOR);
+        labelCurrentMarket->setFont(currentMarketFont);
+        labelCurrentMarket->setText(tr("Ravencoin Market Price"));
+
+        QString currentPriceStyleSheet = ".QLabel{color: %1;}";
+        labelCurrentPrice->setContentsMargins(25,0,0,0);
+        labelCurrentPrice->setFixedHeight(75);
+        labelCurrentPrice->setAlignment(Qt::AlignVCenter);
+        labelCurrentPrice->setStyleSheet(currentPriceStyleSheet.arg(COLOR_LABELS.name()));
+        labelCurrentPrice->setFont(currentMarketFont);
+
+        QLabel* labelBtcRvn = new QLabel();
+        labelBtcRvn->setText("BTC / RVN");
+        labelBtcRvn->setContentsMargins(15,0,0,0);
+        labelBtcRvn->setFixedHeight(75);
+        labelBtcRvn->setAlignment(Qt::AlignVCenter);
+        labelBtcRvn->setStyleSheet(STRING_LABEL_COLOR);
+        labelBtcRvn->setFont(currentMarketFont);
+
+        labelVersionUpdate->setText("<a href=\"https://github.com/RavenProject/Ravencoin/releases\">New Wallet Version Available</a>");
+        labelVersionUpdate->setTextFormat(Qt::RichText);
+        labelVersionUpdate->setTextInteractionFlags(Qt::TextBrowserInteraction);
+        labelVersionUpdate->setOpenExternalLinks(true);
+        labelVersionUpdate->setContentsMargins(0,0,15,0);
+        labelVersionUpdate->setFixedHeight(75);
+        labelVersionUpdate->setAlignment(Qt::AlignVCenter);
+        labelVersionUpdate->setStyleSheet(STRING_LABEL_COLOR);
+        labelVersionUpdate->setFont(currentMarketFont);
+        labelVersionUpdate->hide();
+
+        priceLayout->setGeometry(headerWidget->rect());
+        priceLayout->addWidget(labelCurrentMarket, 0, Qt::AlignVCenter | Qt::AlignLeft);
+        priceLayout->addWidget(labelCurrentPrice, 0,  Qt::AlignVCenter | Qt::AlignLeft);
+        priceLayout->addWidget(labelBtcRvn, 0 , Qt::AlignVCenter | Qt::AlignLeft);
+        priceLayout->addStretch();
+        priceLayout->addWidget(labelVersionUpdate, 0 , Qt::AlignVCenter | Qt::AlignRight);
+
+        // Create the layout for widget to the right of the tool bar
+        QVBoxLayout* mainFrameLayout = new QVBoxLayout(mainWalletWidget);
+        mainFrameLayout->addWidget(headerWidget);
+#ifdef ENABLE_WALLET
+        mainFrameLayout->addWidget(walletFrame);
+#endif
+        mainFrameLayout->setDirection(QBoxLayout::TopToBottom);
+        mainFrameLayout->setContentsMargins(QMargins());
+
+        QVBoxLayout* layout = new QVBoxLayout();
+        layout->addWidget(toolbarWidget);
+        layout->addWidget(mainWalletWidget);
+        layout->setSpacing(0);
+        layout->setContentsMargins(QMargins());
+        layout->setDirection(QBoxLayout::LeftToRight);
+        QWidget* containerWidget = new QWidget();
+        containerWidget->setLayout(layout);
+        setCentralWidget(containerWidget);
+
+        // Network request code for the header widget
+        QObject::connect(networkManager, &QNetworkAccessManager::finished,
+                         this, [=](QNetworkReply *reply) {
+                    if (reply->error()) {
+                        labelCurrentPrice->setText("");
+                        qDebug() << reply->errorString();
+                        return;
+                    }
+                    // Get the data from the network request
+                    QString answer = reply->readAll();
+
+                    // Create regex expression to find the value with 8 decimals
+                    QRegExp rx("\\d*.\\d\\d\\d\\d\\d\\d\\d\\d");
+                    rx.indexIn(answer);
+
+                    // List the found values
+                    QStringList list = rx.capturedTexts();
+
+                    QString currentPriceStyleSheet = ".QLabel{color: %1;}";
+                    // Evaluate the current and next numbers and assign a color (green for positive, red for negative)
+                    bool ok;
+                    if (!list.isEmpty()) {
+                        double next = list.first().toDouble(&ok);
+                        if (!ok) {
+                            labelCurrentPrice->setStyleSheet(currentPriceStyleSheet.arg(COLOR_LABELS.name()));
+                            labelCurrentPrice->setText("");
+                        } else {
+                            double current = labelCurrentPrice->text().toDouble(&ok);
+                            if (!ok) {
+                                current = 0.00000000;
+                            } else {
+                                if (next < current)
+                                    labelCurrentPrice->setStyleSheet(currentPriceStyleSheet.arg("red"));
+                                else if (next > current)
+                                    labelCurrentPrice->setStyleSheet(currentPriceStyleSheet.arg("green"));
+                                else
+                                    labelCurrentPrice->setStyleSheet(currentPriceStyleSheet.arg(COLOR_LABELS.name()));
+                            }
+                            labelCurrentPrice->setText(QString("%1").arg(QString().setNum(next, 'f', 8)));
+                            labelCurrentPrice->setToolTip(tr("Brought to you by binance.com"));
+                        }
+                    }
+                }
+        );
+
+        connect(quitAction, SIGNAL(triggered()), qApp, SLOT(quit()));
+
+        // Create the timer
+        connect(pricingTimer, SIGNAL(timeout()), this, SLOT(getPriceInfo()));
+        pricingTimer->start(10000);
+        getPriceInfo();
+        /** RVN END */
+
+        // Get the latest Ravencoin release and let the user know if they are using the latest version
+        // Network request code for the header widget
+        QObject::connect(networkVersionManager, &QNetworkAccessManager::finished,
+                         this, [=](QNetworkReply *reply) {
+                    if (reply->error()) {
+                        qDebug() << reply->errorString();
+                        return;
+                    }
+
+                    // Get the data from the network request
+                    QString answer = reply->readAll();
+
+                    UniValue releases(UniValue::VARR);
+                    releases.read(answer.toStdString());
+
+                    if (!releases.isArray()) {
+                        return;
+                    }
+
+                    if (!releases.size()) {
+                        return;
+                    }
+
+                    // Latest release lives in the first index of the array return from github v3 api
+                    auto latestRelease = releases[0];
+
+                    auto keys = latestRelease.getKeys();
+                    for (auto key : keys) {
+                       if (key == "tag_name") {
+                           auto latestVersion = latestRelease["tag_name"].get_str();
+
+                           QRegExp rx("v(\\d+).(\\d+).(\\d+)");
+                           rx.indexIn(QString::fromStdString(latestVersion));
+
+                           // List the found values
+                           QStringList list = rx.capturedTexts();
+                           static const int CLIENT_VERSION_MAJOR_INDEX = 1;
+                           static const int CLIENT_VERSION_MINOR_INDEX = 2;
+                           static const int CLIENT_VERSION_REVISION_INDEX = 3;
+                           bool fNewSoftwareFound = false;
+                           bool fStopSearch = false;
+                           if (list.size() >= 4) {
+                               if (CLIENT_VERSION_MAJOR < list[CLIENT_VERSION_MAJOR_INDEX].toInt()) {
+                                   fNewSoftwareFound = true;
+                               } else {
+                                   if (CLIENT_VERSION_MAJOR > list[CLIENT_VERSION_MAJOR_INDEX].toInt()) {
+                                       fStopSearch = true;
+                                   }
+                               }
+
+                               if (!fStopSearch) {
+                                   if (CLIENT_VERSION_MINOR < list[CLIENT_VERSION_MINOR_INDEX].toInt()) {
+                                       fNewSoftwareFound = true;
+                                   } else {
+                                       if (CLIENT_VERSION_MINOR > list[CLIENT_VERSION_MINOR_INDEX].toInt()) {
+                                           fStopSearch = true;
+                                       }
+                                   }
+                               }
+
+                               if (!fStopSearch) {
+                                   if (CLIENT_VERSION_REVISION < list[CLIENT_VERSION_REVISION_INDEX].toInt()) {
+                                       fNewSoftwareFound = true;
+                                   }
+                               }
+                           }
+
+                           if (fNewSoftwareFound) {
+                               labelVersionUpdate->setToolTip(QString::fromStdString(strprintf("Currently running: %s\nLatest version: %s", FormatFullVersion(),
+                                                                                               latestVersion)));
+                               labelVersionUpdate->show();
+
+                               // Only display the message on startup to the user around 1/2 of the time
+                               if (GetRandInt(2) == 1) {
+                                   bool fRet = uiInterface.ThreadSafeQuestion(
+                                           strprintf("\nCurrently running: %s\nLatest version: %s", FormatFullVersion(),
+                                                     latestVersion) + "\n\nWould you like to visit the releases page?",
+                                           "",
+                                           "New Wallet Version Found",
+                                           CClientUIInterface::MSG_VERSION | CClientUIInterface::BTN_NO);
+                                   if (fRet) {
+                                       QString link = "https://github.com/RavenProject/Ravencoin/releases";
+                                       QDesktopServices::openUrl(QUrl(link));
+                                   }
+                               }
+                           } else {
+                               labelVersionUpdate->hide();
+                           }
+                       }
+                    }
+                }
+        );
+
+        getLatestVersion();
     }
 }
 
@@ -503,13 +959,13 @@ void RavenGUI::setClientModel(ClientModel *_clientModel)
         }
 #endif // ENABLE_WALLET
         unitDisplayControl->setOptionsModel(_clientModel->getOptionsModel());
-        
+
         OptionsModel* optionsModel = _clientModel->getOptionsModel();
         if(optionsModel)
         {
             // be aware of the tray icon disable state change reported by the OptionsModel object.
             connect(optionsModel,SIGNAL(hideTrayIconChanged(bool)),this,SLOT(setTrayIconVisible(bool)));
-        
+
             // initialize the disable state of the tray icon with the current value in the model.
             setTrayIconVisible(optionsModel->getHideTrayIcon());
         }
@@ -574,6 +1030,15 @@ void RavenGUI::setWalletActionsEnabled(bool enabled)
     usedSendingAddressesAction->setEnabled(enabled);
     usedReceivingAddressesAction->setEnabled(enabled);
     openAction->setEnabled(enabled);
+
+    /** RVN START */
+    transferAssetAction->setEnabled(false);
+    createAssetAction->setEnabled(false);
+    manageAssetAction->setEnabled(false);
+    messagingAction->setEnabled(false);
+    votingAction->setEnabled(false);
+    restrictedAssetAction->setEnabled(false);
+    /** RVN END */
 }
 
 void RavenGUI::createTrayIcon(const NetworkStyle *networkStyle)
@@ -669,6 +1134,12 @@ void RavenGUI::showDebugWindowActivateConsole()
     showDebugWindow();
 }
 
+void RavenGUI::showWalletRepair()
+{
+    rpcConsole->setTabFocus(RPCConsole::TAB_REPAIR);
+    showDebugWindow();
+}
+
 void RavenGUI::showHelpMessageClicked()
 {
     helpMessageDialog->show();
@@ -717,6 +1188,32 @@ void RavenGUI::gotoVerifyMessageTab(QString addr)
 {
     if (walletFrame) walletFrame->gotoVerifyMessageTab(addr);
 }
+
+/** RVN START */
+void RavenGUI::gotoAssetsPage()
+{
+    transferAssetAction->setChecked(true);
+    if (walletFrame) walletFrame->gotoAssetsPage();
+};
+
+void RavenGUI::gotoCreateAssetsPage()
+{
+    createAssetAction->setChecked(true);
+    if (walletFrame) walletFrame->gotoCreateAssetsPage();
+};
+
+void RavenGUI::gotoManageAssetsPage()
+{
+    manageAssetAction->setChecked(true);
+    if (walletFrame) walletFrame->gotoManageAssetsPage();
+};
+
+void RavenGUI::gotoRestrictedAssetsPage()
+{
+    restrictedAssetAction->setChecked(true);
+    if (walletFrame) walletFrame->gotoRestrictedAssetsPage();
+};
+/** RVN END */
 #endif // ENABLE_WALLET
 
 void RavenGUI::updateNetworkState()
@@ -762,7 +1259,7 @@ void RavenGUI::updateHeadersSyncProgressLabel()
 {
     int64_t headersTipTime = clientModel->getHeaderTipTime();
     int headersTipHeight = clientModel->getHeaderTipHeight();
-    int estHeadersLeft = (GetTime() - headersTipTime) / Params().GetConsensus().nPowTargetSpacing;
+    int estHeadersLeft = (GetTime() - headersTipTime) / GetParams().GetConsensus().nPowTargetSpacing;
     if (estHeadersLeft > HEADER_HEIGHT_DELTA_SYNC)
         progressBarLabel->setText(tr("Syncing Headers (%1%)...").arg(QString::number(100.0 / (headersTipHeight+estHeadersLeft)*headersTipHeight, 'f', 1)));
 }
@@ -776,6 +1273,7 @@ void RavenGUI::setNumBlocks(int count, const QDateTime& blockDate, double nVerif
         else
             modalOverlay->tipUpdate(count, blockDate, nVerificationProgress);
     }
+
     if (!clientModel)
         return;
 
@@ -987,18 +1485,51 @@ void RavenGUI::showEvent(QShowEvent *event)
 }
 
 #ifdef ENABLE_WALLET
-void RavenGUI::incomingTransaction(const QString& date, int unit, const CAmount& amount, const QString& type, const QString& address, const QString& label)
+void RavenGUI::incomingTransaction(const QString& date, int unit, const CAmount& amount, const QString& type, const QString& address, const QString& label, const QString& assetName)
 {
     // On new transaction, make an info balloon
-    QString msg = tr("Date: %1\n").arg(date) +
-                  tr("Amount: %1\n").arg(RavenUnits::formatWithUnit(unit, amount, true)) +
-                  tr("Type: %1\n").arg(type);
+    QString msg = tr("Date: %1\n").arg(date);
+    if (assetName == "RVN")
+        msg += tr("Amount: %1\n").arg(RavenUnits::formatWithUnit(unit, amount, true));
+    else
+        msg += tr("Amount: %1\n").arg(RavenUnits::formatWithCustomName(assetName, amount, MAX_ASSET_UNITS, true));
+
+    msg += tr("Type: %1\n").arg(type);
+
     if (!label.isEmpty())
         msg += tr("Label: %1\n").arg(label);
     else if (!address.isEmpty())
         msg += tr("Address: %1\n").arg(address);
     message((amount)<0 ? tr("Sent transaction") : tr("Incoming transaction"),
              msg, CClientUIInterface::MSG_INFORMATION);
+}
+
+void RavenGUI::checkAssets()
+{
+    // Check that status of RIP2 and activate the assets icon if it is active
+    if(AreAssetsDeployed()) {
+        transferAssetAction->setDisabled(false);
+        transferAssetAction->setToolTip(tr("Transfer assets to RVN addresses"));
+        createAssetAction->setDisabled(false);
+        createAssetAction->setToolTip(tr("Create new main/sub/unique assets"));
+        manageAssetAction->setDisabled(false);
+        }
+    else {
+        transferAssetAction->setDisabled(true);
+        transferAssetAction->setToolTip(tr("Assets not yet active"));
+        createAssetAction->setDisabled(true);
+        createAssetAction->setToolTip(tr("Assets not yet active"));
+        manageAssetAction->setDisabled(true);
+        }
+
+    if (AreRestrictedAssetsDeployed()) {
+        restrictedAssetAction->setDisabled(false);
+        restrictedAssetAction->setToolTip(tr("Manage restricted assets"));
+
+    } else {
+        restrictedAssetAction->setDisabled(true);
+        restrictedAssetAction->setToolTip(tr("Restricted Assets not yet active"));
+    }
 }
 #endif // ENABLE_WALLET
 
@@ -1048,10 +1579,19 @@ bool RavenGUI::handlePaymentRequest(const SendCoinsRecipient& recipient)
 
 void RavenGUI::setHDStatus(int hdEnabled)
 {
-    labelWalletHDStatusIcon->setPixmap(platformStyle->SingleColorIcon(hdEnabled ? ":/icons/hd_enabled" : ":/icons/hd_disabled").pixmap(STATUSBAR_ICONSIZE,STATUSBAR_ICONSIZE));
+    QString icon = "";
+    if (hdEnabled == HD_DISABLED) {
+        icon = ":/icons/hd_disabled";
+    } else if (hdEnabled == HD_ENABLED) {
+        icon = ":/icons/hd_enabled";
+    } else if (hdEnabled == HD44_ENABLED) {
+        icon = ":/icons/hd_enabled_44";
+    }
+
+    labelWalletHDStatusIcon->setPixmap(platformStyle->SingleColorIcon(icon).pixmap(STATUSBAR_ICONSIZE,STATUSBAR_ICONSIZE));
     labelWalletHDStatusIcon->setToolTip(hdEnabled ? tr("HD key generation is <b>enabled</b>") : tr("HD key generation is <b>disabled</b>"));
 
-    // eventually disable the QLabel to set its opacity to 50% 
+    // eventually disable the QLabel to set its opacity to 50%
     labelWalletHDStatusIcon->setEnabled(hdEnabled);
 }
 
@@ -1179,11 +1719,25 @@ static bool ThreadSafeMessageBox(RavenGUI *gui, const std::string& message, cons
     return ret;
 }
 
+static bool ThreadSafeMnemonic(RavenGUI *gui, unsigned int style)
+{
+    bool modal = (style & CClientUIInterface::MODAL);
+    // The SECURE flag has no effect in the Qt GUI.
+    // bool secure = (style & CClientUIInterface::SECURE);
+    style &= ~CClientUIInterface::SECURE;
+    bool ret = false;
+    // In case of modal message, use blocking connection to wait for user to click a button
+    QMetaObject::invokeMethod(gui, "mnemonic",
+                              modal ? GUIUtil::blockingGUIThreadConnection() : Qt::QueuedConnection);
+    return ret;
+}
+
 void RavenGUI::subscribeToCoreSignals()
 {
     // Connect signals to client
     uiInterface.ThreadSafeMessageBox.connect(boost::bind(ThreadSafeMessageBox, this, _1, _2, _3));
     uiInterface.ThreadSafeQuestion.connect(boost::bind(ThreadSafeMessageBox, this, _1, _3, _4));
+    uiInterface.ShowMnemonic.connect(boost::bind(ThreadSafeMnemonic, this, _1));
 }
 
 void RavenGUI::unsubscribeFromCoreSignals()
@@ -1191,6 +1745,7 @@ void RavenGUI::unsubscribeFromCoreSignals()
     // Disconnect signals from client
     uiInterface.ThreadSafeMessageBox.disconnect(boost::bind(ThreadSafeMessageBox, this, _1, _2, _3));
     uiInterface.ThreadSafeQuestion.disconnect(boost::bind(ThreadSafeMessageBox, this, _1, _3, _4));
+    uiInterface.ShowMnemonic.disconnect(boost::bind(ThreadSafeMnemonic, this, _1));
 }
 
 void RavenGUI::toggleNetworkActive()
@@ -1200,22 +1755,33 @@ void RavenGUI::toggleNetworkActive()
     }
 }
 
+/** Get restart command-line parameters and request restart */
+void RavenGUI::handleRestart(QStringList args)
+{
+    if (!ShutdownRequested())
+        Q_EMIT requestedRestart(args);
+}
+
 UnitDisplayStatusBarControl::UnitDisplayStatusBarControl(const PlatformStyle *platformStyle) :
     optionsModel(0),
     menu(0)
 {
-    createContextMenu();
+    createContextMenu(platformStyle);
     setToolTip(tr("Unit to show amounts in. Click to select another unit."));
     QList<RavenUnits::Unit> units = RavenUnits::availableUnits();
     int max_width = 0;
     const QFontMetrics fm(font());
     for (const RavenUnits::Unit unit : units)
     {
-        max_width = qMax(max_width, fm.width(RavenUnits::name(unit)));
+    	#ifndef QTversionPreFiveEleven
+        	max_width = qMax(max_width, fm.horizontalAdvance(RavenUnits::name(unit)));
+        #else
+        	max_width = qMax(max_width, fm.width(RavenUnits::name(unit)));
+        #endif
     }
     setMinimumSize(max_width, 0);
     setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    setStyleSheet(QString("QLabel { color : %1 }").arg(platformStyle->SingleColor().name()));
+    setStyleSheet(QString("QLabel { color : %1; }").arg(platformStyle->DarkOrangeColor().name()));
 }
 
 /** So that it responds to button clicks */
@@ -1225,7 +1791,7 @@ void UnitDisplayStatusBarControl::mousePressEvent(QMouseEvent *event)
 }
 
 /** Creates context menu, its actions, and wires up all the relevant signals for mouse events. */
-void UnitDisplayStatusBarControl::createContextMenu()
+void UnitDisplayStatusBarControl::createContextMenu(const PlatformStyle *platformStyle)
 {
     menu = new QMenu(this);
     for (RavenUnits::Unit u : RavenUnits::availableUnits())
@@ -1234,6 +1800,7 @@ void UnitDisplayStatusBarControl::createContextMenu()
         menuAction->setData(QVariant(u));
         menu->addAction(menuAction);
     }
+    menu->setStyleSheet(QString("QMenu::item{ color: %1; } QMenu::item:selected{ color: %2;}").arg(platformStyle->DarkOrangeColor().name(), platformStyle->TextColor().name()));
     connect(menu,SIGNAL(triggered(QAction*)),this,SLOT(onMenuSelection(QAction*)));
 }
 
@@ -1272,4 +1839,24 @@ void UnitDisplayStatusBarControl::onMenuSelection(QAction* action)
     {
         optionsModel->setDisplayUnit(action->data());
     }
+}
+
+void RavenGUI::getPriceInfo()
+{
+    request->setUrl(QUrl("https://api.binance.com/api/v1/ticker/price?symbol=RVNBTC"));
+    networkManager->get(*request);
+}
+
+#ifdef ENABLE_WALLET
+void RavenGUI::mnemonic()
+{
+        MnemonicDialog dlg(this);
+        dlg.exec();
+}
+#endif
+
+void RavenGUI::getLatestVersion()
+{
+    versionRequest->setUrl(QUrl("https://api.github.com/repos/RavenProject/Ravencoin/releases"));
+    networkVersionManager->get(*versionRequest);
 }

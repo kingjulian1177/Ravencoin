@@ -1,5 +1,5 @@
 // Copyright (c) 2011-2016 The Bitcoin Core developers
-// Copyright (c) 2017 The Raven Core developers
+// Copyright (c) 2017-2019 The Raven Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -17,7 +17,9 @@
 #include "transactionfilterproxy.h"
 #include "transactionrecord.h"
 #include "transactiontablemodel.h"
+#include "validation.h"
 #include "walletmodel.h"
+#include "guiconstants.h"
 
 #include "ui_interface.h"
 
@@ -37,6 +39,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QGraphicsDropShadowEffect>
 
 TransactionView::TransactionView(const PlatformStyle *platformStyle, QWidget *parent) :
     QWidget(parent), model(0), transactionProxyModel(0),
@@ -114,6 +117,14 @@ TransactionView::TransactionView(const PlatformStyle *platformStyle, QWidget *pa
     amountWidget->setValidator(new QDoubleValidator(0, 1e20, 8, this));
     hlayout->addWidget(amountWidget);
 
+    assetNameWidget = new QLineEdit(this);
+#if QT_VERSION >= 0x040700
+    assetNameWidget->setPlaceholderText(tr("Asset name"));
+#endif
+    assetNameWidget->setFixedWidth(200);
+    hlayout->addWidget(assetNameWidget);
+    assetNameWidget->hide();
+
     // Delay before filtering transactions in ms
     static const int input_filter_delay = 200;
 
@@ -124,6 +135,11 @@ TransactionView::TransactionView(const PlatformStyle *platformStyle, QWidget *pa
     QTimer* prefix_typing_delay = new QTimer(this);
     prefix_typing_delay->setSingleShot(true);
     prefix_typing_delay->setInterval(input_filter_delay);
+
+    QTimer *asset_typing_delay;
+    asset_typing_delay = new QTimer(this);
+    asset_typing_delay->setSingleShot(true);
+    asset_typing_delay->setInterval(input_filter_delay);
 
     QVBoxLayout *vlayout = new QVBoxLayout(this);
     vlayout->setContentsMargins(0,0,0,0);
@@ -147,14 +163,16 @@ TransactionView::TransactionView(const PlatformStyle *platformStyle, QWidget *pa
     view->setContextMenuPolicy(Qt::CustomContextMenu);
 
     view->installEventFilter(this);
+    view->setStyleSheet(".QTableView { border: none;}");
 
     transactionView = view;
     transactionView->setObjectName("transactionView");
 
+
     // Actions
     abandonAction = new QAction(tr("Abandon transaction"), this);
-    bumpFeeAction = new QAction(tr("Increase transaction fee"), this);
-    bumpFeeAction->setObjectName("bumpFeeAction");
+//    bumpFeeAction = new QAction(tr("Increase transaction fee"), this);
+//    bumpFeeAction->setObjectName("bumpFeeAction");
     QAction *copyAddressAction = new QAction(tr("Copy address"), this);
     QAction *copyLabelAction = new QAction(tr("Copy label"), this);
     QAction *copyAmountAction = new QAction(tr("Copy amount"), this);
@@ -174,10 +192,11 @@ TransactionView::TransactionView(const PlatformStyle *platformStyle, QWidget *pa
     contextMenu->addAction(copyTxPlainText);
     contextMenu->addAction(showDetailsAction);
     contextMenu->addSeparator();
-    contextMenu->addAction(bumpFeeAction);
+//    contextMenu->addAction(bumpFeeAction);
     contextMenu->addAction(abandonAction);
     contextMenu->addAction(editLabelAction);
 
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     mapperThirdPartyTxUrls = new QSignalMapper(this);
 
     // Connect actions
@@ -188,13 +207,15 @@ TransactionView::TransactionView(const PlatformStyle *platformStyle, QWidget *pa
     connect(watchOnlyWidget, SIGNAL(activated(int)), this, SLOT(chooseWatchonly(int)));
     connect(amountWidget, SIGNAL(textChanged(QString)), amount_typing_delay, SLOT(start()));
     connect(amount_typing_delay, SIGNAL(timeout()), this, SLOT(changedAmount()));
+    connect(assetNameWidget, SIGNAL(textChanged(QString)), asset_typing_delay, SLOT(start()));
+    connect(asset_typing_delay, SIGNAL(timeout()), this, SLOT(changedAssetName()));
     connect(addressWidget, SIGNAL(textChanged(QString)), prefix_typing_delay, SLOT(start()));
     connect(prefix_typing_delay, SIGNAL(timeout()), this, SLOT(changedPrefix()));
 
     connect(view, SIGNAL(doubleClicked(QModelIndex)), this, SIGNAL(doubleClicked(QModelIndex)));
     connect(view, SIGNAL(customContextMenuRequested(QPoint)), this, SLOT(contextualMenu(QPoint)));
 
-    connect(bumpFeeAction, SIGNAL(triggered()), this, SLOT(bumpFee()));
+//    connect(bumpFeeAction, SIGNAL(triggered()), this, SLOT(bumpFee()));
     connect(abandonAction, SIGNAL(triggered()), this, SLOT(abandonTx()));
     connect(copyAddressAction, SIGNAL(triggered()), this, SLOT(copyAddress()));
     connect(copyLabelAction, SIGNAL(triggered()), this, SLOT(copyLabel()));
@@ -204,6 +225,19 @@ TransactionView::TransactionView(const PlatformStyle *platformStyle, QWidget *pa
     connect(copyTxPlainText, SIGNAL(triggered()), this, SLOT(copyTxPlainText()));
     connect(editLabelAction, SIGNAL(triggered()), this, SLOT(editLabel()));
     connect(showDetailsAction, SIGNAL(triggered()), this, SLOT(showDetails()));
+
+    // Trigger the call to show the assets table if assets are active
+    showingAssets = false;
+    showAssets();
+
+    dateWidget->setFont(GUIUtil::getSubLabelFont());
+    typeWidget->setFont(GUIUtil::getSubLabelFont());
+    addressWidget->setFont(GUIUtil::getSubLabelFont());
+    amountWidget->setFont(GUIUtil::getSubLabelFont());
+    assetNameWidget->setFont(GUIUtil::getSubLabelFont());
+    contextMenu->setFont(GUIUtil::getSubLabelFont());
+    transactionView->setFont(GUIUtil::getSubLabelFont());
+
 }
 
 void TransactionView::setModel(WalletModel *_model)
@@ -233,6 +267,7 @@ void TransactionView::setModel(WalletModel *_model)
         transactionView->setColumnWidth(TransactionTableModel::Date, DATE_COLUMN_WIDTH);
         transactionView->setColumnWidth(TransactionTableModel::Type, TYPE_COLUMN_WIDTH);
         transactionView->setColumnWidth(TransactionTableModel::Amount, AMOUNT_MINIMUM_COLUMN_WIDTH);
+        transactionView->setColumnWidth(TransactionTableModel::AssetName, AMOUNT_MINIMUM_COLUMN_WIDTH);
 
         columnResizingFixer = new GUIUtil::TableViewLastColumnResizingFixer(transactionView, AMOUNT_MINIMUM_COLUMN_WIDTH, MINIMUM_COLUMN_WIDTH, this);
 
@@ -348,6 +383,13 @@ void TransactionView::changedAmount()
     }
 }
 
+void TransactionView::changedAssetName()
+{
+    if (!transactionProxyModel)
+        return;
+    transactionProxyModel->setAssetNamePrefix(assetNameWidget->text());
+}
+
 void TransactionView::exportClicked()
 {
     if (!model || !model->getOptionsModel()) {
@@ -374,6 +416,9 @@ void TransactionView::exportClicked()
     writer.addColumn(tr("Label"), 0, TransactionTableModel::LabelRole);
     writer.addColumn(tr("Address"), 0, TransactionTableModel::AddressRole);
     writer.addColumn(RavenUnits::getAmountColumnTitle(model->getOptionsModel()->getDisplayUnit()), 0, TransactionTableModel::FormattedAmountRole);
+    if (AreAssetsDeployed()) {
+        writer.addColumn(tr("Asset"), 0, TransactionTableModel::AssetNameRole);
+    }
     writer.addColumn(tr("ID"), 0, TransactionTableModel::TxIDRole);
 
     if(!writer.write()) {
@@ -383,6 +428,29 @@ void TransactionView::exportClicked()
     else {
         Q_EMIT message(tr("Exporting Successful"), tr("The transaction history was successfully saved to %1.").arg(filename),
             CClientUIInterface::MSG_INFORMATION);
+    }
+}
+
+void TransactionView::showAssets()
+{
+    if (AreAssetsDeployed() && !showingAssets) {
+        typeWidget->addItem(tr("Asset Issued"), TransactionFilterProxy::TYPE(TransactionRecord::Issue));
+        typeWidget->addItem(tr("Asset Reissued"), TransactionFilterProxy::TYPE(TransactionRecord::Reissue));
+        typeWidget->addItem(tr("Asset Received"), TransactionFilterProxy::TYPE(TransactionRecord::TransferFrom));
+        typeWidget->addItem(tr("Asset Sent"), TransactionFilterProxy::TYPE(TransactionRecord::TransferTo));
+
+        assetNameWidget->show();
+
+        QAction *copyAssetNameAction = new QAction(tr("Copy asset name"), this);
+        contextMenu->addAction(copyAssetNameAction);
+        connect(copyAssetNameAction, SIGNAL(triggered()), this, SLOT(copyAssetName()));
+
+        showingAssets = true;
+    }
+
+    if (!AreAssetsDeployed())
+    {
+        assetNameWidget->hide();
     }
 }
 
@@ -397,7 +465,7 @@ void TransactionView::contextualMenu(const QPoint &point)
     uint256 hash;
     hash.SetHex(selection.at(0).data(TransactionTableModel::TxHashRole).toString().toStdString());
     abandonAction->setEnabled(model->transactionCanBeAbandoned(hash));
-    bumpFeeAction->setEnabled(model->transactionCanBeBumped(hash));
+//    bumpFeeAction->setEnabled(model->transactionCanBeBumped(hash));
 
     if(index.isValid())
     {
@@ -449,6 +517,11 @@ void TransactionView::copyAddress()
 void TransactionView::copyLabel()
 {
     GUIUtil::copyEntryData(transactionView, 0, TransactionTableModel::LabelRole);
+}
+
+void TransactionView::copyAssetName()
+{
+    GUIUtil::copyEntryData(transactionView, 0, TransactionTableModel::AssetNameRole);
 }
 
 void TransactionView::copyAmount()
